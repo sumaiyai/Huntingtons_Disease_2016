@@ -1,0 +1,184 @@
+HTT_Leavitt Pyrosequencing of CTCF Binding Site in HTT Promoter
+================================================================
+## By: Sumaiya Islam
+## Date: April 21, 2015
+
+### Script contents:
+- Generate heatmap of the methylation values (measured by pyrosequencing) for CpGs at CTCF binding site in HTT promoter
+
+### A. Set up wd & packages
+
+We will initially set our working directory and load our libraries.
+```{r HTT_Leavitt_setup, include = FALSE, echo=FALSE}
+setwd("/home/sislam/HTT_Leavitt")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library("RColorBrewer")
+library(knitr)
+library(xtable)
+library(limma)
+library(reshape)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(MASS)
+```
+
+### B. Load data
+
+We will load the data containing both the methylation values for the 3 sites (position 1, 2, 3) in the CTCF binding site
+
+```{r load_data}
+CTCF.pyro.dat<-read.csv(file="CTCF_Binding_Site_Pyro_Results.csv", header = T, check.names=F)
+head(CTCF.pyro.dat)
+str(CTCF.pyro.dat)
+CTCF.pyro.dat$Sample_Name<-as.character(CTCF.pyro.dat$Sample_Name)
+CTCF.pyro<-CTCF.pyro.dat[which(CTCF.pyro.dat$Tissue%in%c("Liver", "Cortex")),]
+str(CTCF.pyro)
+
+
+# subset out matrix of data points and scale data
+CTCF.pyro.data<-CTCF.pyro[,7:9]
+rownames(CTCF.pyro.data)<-CTCF.pyro$Sample_Name
+CTCF.pyro.dat.scaled<-scale(CTCF.pyro.data)
+```
+
+### C. Heatmaps
+
+#### Heatmap of all samples pyrosequenced
+```{r}
+# # colour key for tissue 
+# tissueCol <- as.numeric(factor(CTCF.pyro$Tissue))
+# tissueCol <- gsub("1", "orange",  gsub("2", "blue", gsub("3", "forestgreen", tissueCol)))
+# 
+# # colour palette
+# BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+# 
+# # heatmap
+# heatmap.2(CTCF.pyro.dat.scaled,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = tissueCol, cexCol = 0.8, margins=c(9,9))
+# legend("top", legend = c("Cortex", "Liver", "Testes"),fill = c("orange","blue", "forestgreen"), horiz = T)
+```
+
+#### Heatmap of samples of original dataset 
+```{r}
+# # subset out samples from original dataset
+# original.samples.dat<-subset(CTCF.pyro, Dataset=="Original", select=c("Sample_Name","Tissue", "Position_1", "Position_2", "Position_3"))
+# str(original.samples.dat)
+# orig.dat<-original.samples.dat[,3:5]
+# rownames(orig.dat)<-original.samples.dat$Sample_Name
+# orig.dat.scaled<-scale(orig.dat)
+# 
+# # colour key for tissue 
+# tissueCol <- as.numeric(factor(original.samples.dat$Tissue))
+# tissueCol <- gsub("1", "orange",  gsub("2", "blue", gsub("3", "forestgreen", tissueCol)))
+# 
+# # colour palette
+# BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+# 
+# # heatmap
+# heatmap.2(orig.dat.scaled,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = tissueCol, cexCol = 0.8, margins=c(9,9))
+# legend("top", legend = c("Cortex", "Liver", "Testes"),fill = c("orange","blue", "forestgreen"), horiz = T)
+```
+
+#### Heatmap of samples of validation dataset 
+```{r}
+# # subset out samples from original dataset
+# validation.samples.dat<-subset(CTCF.pyro, Dataset=="Validation", select=c("Sample_Name","Tissue", "Position_1", "Position_2", "Position_3"))
+# str(validation.samples.dat)
+# vali.dat<-validation.samples.dat[,3:5]
+# rownames(vali.dat)<-validation.samples.dat$Sample_Name
+# vali.dat.scaled<-scale(vali.dat)
+# head(vali.dat.scaled)
+# 
+# # colour key for tissue 
+# tissueCol <- as.numeric(factor(validation.samples.dat$Tissue))
+# tissueCol <- gsub("1", "orange",  gsub("2", "blue", gsub("3", "forestgreen", tissueCol)))
+# 
+# # colour palette
+# BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+# 
+# # heatmap
+# heatmap.2(vali.dat.scaled,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = tissueCol, cexCol = 0.8, margins=c(9,9))
+# legend("top", legend = c("Cortex", "Liver", "Testes"),fill = c("orange","blue", "forestgreen"), horiz = T)
+```
+
+#### Heatmap of liver and cortex samples of original dataset 
+```{r}
+# subset out samples from original dataset
+original.corliv.dat<-CTCF.pyro[which(CTCF.pyro$Dataset=="Original" & CTCF.pyro$Tissue%in%c("Liver", "Cortex")),]
+colnames(original.corliv.dat)
+orig.corliv.dat<-original.corliv.dat[,7:9]
+rownames(orig.corliv.dat)<-original.corliv.dat$Sample_Name
+orig.corliv.dat.scaled<-scale(orig.corliv.dat)
+
+
+# colour key for tissue 
+tissueCol <- as.numeric(factor(original.corliv.dat$Tissue))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+
+# colour palette
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+# heatmap
+heatmap.2(orig.corliv.dat.scaled,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = tissueCol, cexCol = 0.8, margins=c(9,9))
+legend("top", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+```
+
+#### Heatmap of liver and cortex samples of validation dataset 
+```{r}
+# subset out samples from original dataset
+validation.corliv.dat<-CTCF.pyro[which(CTCF.pyro$Dataset=="Validation" & CTCF.pyro$Tissue%in%c("Liver", "Cortex")),]
+colnames(validation.corliv.dat)
+vali.corliv.dat<-validation.corliv.dat[,7:9]
+rownames(vali.corliv.dat)<-validation.corliv.dat$Sample_Name
+vali.corliv.dat.scaled<-scale(vali.corliv.dat)
+
+
+# colour key for tissue 
+tissueCol <- as.numeric(factor(validation.corliv.dat$Tissue))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+
+# colour palette
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+# heatmap
+heatmap.2(vali.corliv.dat.scaled,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = tissueCol, cexCol = 0.8, margins=c(9,9))
+legend("top", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+```
+
+#### Generate Boxplots for CTCF Pyrosequencing Measures and Wilcoxon signed-rank (paired) testing
+```{r}
+# check for normality
+CpG1.normality<-shapiro.test(CTCF.pyro$Position_1)
+CpG1.normality$p.value # p = 0.012, p-value is lower than 0.05, can conclude that data deviates from normality
+(CpG1.test<-wilcox.test(CTCF.pyro$Position_1[1:7], CTCF.pyro$Position_1[8:14], paired=TRUE)) # p = 0.016
+ggplot(CTCF.pyro, aes(Tissue, Position_1))+
+  geom_boxplot(color="grey", outlier.shape=NA)+
+  geom_point(aes(color=Dataset), shape=19, size=4, position = position_jitter(w = 0.2))+
+  theme_bw()+xlab("Tissue")+ylab("CpG 1 Methylation (%)")+
+  scale_color_manual(values=c("#99d594", "#fc8d59"))
+
+CpG2.normality<-shapiro.test(CTCF.pyro$Position_2)
+CpG2.normality$p.value # p = 0.005, p-value is lower than 0.05, can conclude that data deviates from normality
+(CpG2.test<-wilcox.test(CTCF.pyro$Position_2[1:7], CTCF.pyro$Position_2[8:14], paired=TRUE)) # p = 0.016
+ggplot(CTCF.pyro, aes(Tissue, Position_2))+
+  geom_boxplot(color="grey", outlier.shape=NA)+
+  geom_point(aes(color=Dataset), shape=19, size=4, position = position_jitter(w = 0.2))+
+  theme_bw()+xlab("Tissue")+ylab("CpG 2 Methylation (%)")+
+  scale_color_manual(values=c("#99d594", "#fc8d59"))
+
+CpG3.normality<-shapiro.test(CTCF.pyro$Position_3)
+CpG3.normality$p.value # p = 0.026, p-value is lower than 0.05, can conclude that data deviates from normality
+(CpG3.test<-wilcox.test(CTCF.pyro$Position_3[1:7], CTCF.pyro$Position_3[8:14], paired=TRUE)) # p = 0.016
+ggplot(CTCF.pyro, aes(Tissue, Position_3))+
+  geom_boxplot(color="grey", outlier.shape=NA)+
+  geom_point(aes(color=Dataset), shape=19, size=4, position = position_jitter(w = 0.2))+
+  theme_bw()+xlab("Tissue")+ylab("CpG 3 Methylation (%)")+
+  scale_color_manual(values=c("#99d594", "#fc8d59"))
+
+
+```
+

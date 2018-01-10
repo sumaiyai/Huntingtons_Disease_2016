@@ -1,0 +1,406 @@
+HTT_Leavitt Linear Regression Analysis for Cortex Samples
+========================================================
+## By: Sumaiya Islam
+## Date: October 13, 2015
+
+### Script contents:
+- Candidate gene (ie HTT) analysis to identify differentially methylated sites between HD cases vs controls using limma
+- Genome-wide analyiss to identify differentially methylated sites between HD cases vs controls using limma
+- Genome-wide analysis to identify differential methylation due to age of onset in HD cortex samples only
+- Bumphunting to identify differentially methylated regions (DMRs) between HD cases vs controls across the genome
+
+Question 1: is the HTT gene differentially methylated between HD and control cortex samples? Use all the cortex samples.
+
+### A. Set up wd & packages
+
+We will initially set our working directory and load our libraries.
+```{r HTT_Leavitt_setup, include = FALSE, echo=FALSE}
+setwd("/home/sislam/HTT_Leavitt")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library("RColorBrewer")
+library(knitr)
+library(xtable)
+library(limma)
+library(ggplot2)
+library(car)
+# source("http://bioconductor.org/biocLite.R")
+# biocLite("BSgenome.Hsapiens.UCSC.hg19")
+# library('BSgenome.Hsapiens.UCSC.hg19')
+```
+
+### B. Load data
+
+We will load the methylation data of the cortex samples only after preprocessing, normalization and CETS cell type correction. 
+
+```{r load_data}
+load("HTT_Leavitt.cortex.cor.final.RData") # normalized, Combat-corrected, CETS cell-type corrected cortex-only dataset
+cortexData<-HTT_Leavitt.cortex.cor
+dim(cortexData) # probes = 437,035  n = 13
+CETS.sites<-read.csv(file="CETS.sites.csv") # load CETS markers
+CETS<-as.character(CETS.sites$x)
+cortexDat<-cortexData[!featureNames(cortexData)%in%CETS, ] # filter out CETS markers
+dim(cortexDat) # probes = 427,242  n = 13
+```
+
+### C. Candidate gene approach
+
+We will first take a candidate gene approach (CGA) to investigate differential methylation between HD vs controls in a specific genomic region; specifically, we are interested in the HTT proximal gene region at the following location: chr4:2973107-3258169
+
+```{r}
+fDat.cortex<-fData(cortexDat)
+chr.four<-subset(fDat.cortex, CHR == 4)
+probes.of.interest<-subset(chr.four, MAPINFO>=2973107 & MAPINFO<=3258169, select = TargetID)
+# probes.ordered<-probes.of.interest[order(probes.of.interest$MAPINFO),]
+# probes.ordered$TargetID
+nrow(probes.of.interest) # There are 87 probes underlying this region of interest. Note this differs from the total 100 probes underlying this region in UCSC Genome Browser because some of the probes (ie 13) have been filtered out.
+(target.probes<-as.character(probes.of.interest$TargetID)) # note that there is one non-CpG site in this region
+cortexDat.CGA<-cortexDat[target.probes,]
+dim(cortexDat.CGA) # probes = 87, n = 13
+table(cortexDat.CGA$Disease_status) # Control samples = 6, HD samples = 7
+```
+
+We will test for normality:
+```{r}
+head(featureNames(cortexDat.CGA))
+ind<-sample(featureNames(cortexDat.CGA),8) # randomly select 8 probes from the dataset
+list(ind)
+test.normality<-function(x){
+  d <- density(exprs(cortexDat.CGA)[x,]) # returns the density data
+  plot(d) # plots the results
+  shapiro.test(exprs(cortexDat.CGA)[x,])
+}
+lapply(ind,test.normality) 
+```
+
+We can see from the output of 8 randomly selected probes in our dataset that they tested to be normally distributed according to the Shapiro-Wilk test. With the Shapiro-Wilk test (and with the Kolmogorov-Smironov test) the p-value tells you what the chances are that the data comes from a normal distribution. The lower this value, the smaller the chance. Statisticians typically use a value of 0.05 as a cutoff, so when the p-value is lower than 0.05, you can conclude that the sample deviates from normality. We can see that for all our tested probes, the p-value is > 0.05, indicating that the data is normally distributed. Since the assumption of normality is met with our dataset, we can use linear regression analysis (limma) for differential methylation analysis. 
+
+We will now perform linear regression analysis to see if there are differential methylation levels for any of these probes in this region between HD and control cortex samples. 
+
+```{r}
+table(pData(cortexDat.CGA)$Disease_status, pData(cortexDat.CGA)$Sex) # note that there are no female control samples so we cannot control for sex as a multivariate linear model. We will have to perform simple linear regression using Disease_status as our main effect.
+
+## generate model matrix
+## fit separate linear models for each individual candidate CpG 
+z<-lm(unlist(exprs(cortexDat.CGA)[1,]) ~  cortexDat.CGA$Disease_status)
+summary(z)
+mval<-exprs(cortexDat.CGA)
+p<-sapply(1:nrow(mval), function(x) {z<-lm(unlist(mval[x,]) ~  cortexDat.CGA$Disease_status)
+                                                  coef(summary(z))["cortexDat.CGA$Disease_statusHD", "Pr(>|t|)"]})
+adj.p<-p.adjust(p, method="BH")
+length(which(adj.p<=0.05)) # there are no hits (at FDR = 0.05)
+```
+
+We will plot the p-value distribution of this model:
+
+```{r}
+(Disease.Pvalplot <- ggplot(topT.CGA, aes(x = P.Value)) + geom_histogram(aes(y = ..density..), binwidth = 0.05, colour = "deeppink4", fill = "deeppink", alpha = 0.5) + geom_density(size = 1) + xlab("unadjusted P-value") + ylab("Frequency") + ggtitle(expression(atop("Unadj. P-val distribution for the Disease status effects in HTT region"))))
+```
+
+We can see by the topTable output that there doesn't appear to be any significantly differentially methylated probes between Control vs. HD cortex samples in this region. 
+
+Note the odd unadjusted p-value distribution (seems almost bimodal). If there were any significant hits amongst these 93 probes, we would expect this plot to have show high density on the left hand side of the graph (ie above p-value = zero).
+
+We will also perform cluster analysis (visualized as a heatmap) to look for methylation patterns between HD cases and controls.
+
+```{r}
+
+# scale attributes
+ex<-exprs(cortexDat.CGA)
+ex.ord <- ex[order(fData(cortexDat.CGA)$CHR, fData(cortexDat.CGA)$MAPINFO),]
+corDat <- scale(t(ex.ord))
+identical(colnames(ex.ord), rownames(pData(cortexDat.CGA)))
+rownames(ex.ord)
+dim(ex.ord) # probes = 87, n = 13
+
+# use a heatmap to look examine candidate HTT probes
+diseaseCol <- as.numeric(factor(cortexDat.CGA$Disease_status))
+diseaseCol <- gsub("1", "goldenrod",  gsub("2", "darkmagenta", diseaseCol))
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+heatmap.2(corDat,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = diseaseCol, cexCol = 0.8, key=TRUE, margins=c(9,9))
+legend("topright", bty="n", legend = c("Control", "HD"),fill = c("goldenrod","darkmagenta"), horiz = T)
+```
+
+In this heatmap, the 87 probes have been ordered according to their chromosomal position along the length of the HTT region. 
+
+We will now generate a heatmap that clusters the probes using hierarchical cluster analysis with average linkage. 
+```{r}
+heatmap.2(corDat,dendrogram="both", trace = "none", col = BuPu(256), RowSideColors = diseaseCol, cexCol = 0.8, keysize = 1)
+legend("topright", bty="n", legend = c("Control", "HD"),fill = c("goldenrod","darkmagenta"), horiz = T)
+```
+
+There is no distinct clustering of the methylation data of the 87 probes by HD disease status.
+
+We will examine sample-to-sample correlations of the methylation levels of these 87 probes using cluster analysis:
+
+```{r}
+cor.cortex <- cor(exprs(cortexDat.CGA), use = "pairwise.complete.obs")
+heatmap.2(cor.cortex,main = "Correlation of samples - 93 probes",
+          trace = "none", col = BuPu(256), dendrogram = "both",
+          cexRow=0.8,ColSideColors = diseaseCol, RowSideColors = diseaseCol, cexCol = 0.8,keysize = 1)
+legend("topright", bty="n", legend = c("Control", "HD"),fill = c("goldenrod","darkmagenta"), horiz = T)
+```
+
+Again, we can see that the sample-to-sample correlation based on the methylation levels of the candidate 87 sites do not show any discernible clustering based on HD disease status. 
+
+
+We will plot the DNA methylation points for each of the 87 probes
+
+```{r}
+# re-structure data into melted dataframe for ggplot2
+HTT.plot<-as.data.frame(betas(cortexDat.CGA))
+HTT.plot$Coord<-fData(cortexDat.CGA)$MAPINFO
+HTT.plot$Site<-rownames(HTT.plot)
+head(HTT.plot.melted<-melt(HTT.plot, id=c("Site", "Coord")))
+pData(cortexDat.CGA)$Sample_Name<-rownames(pData(cortexDat.CGA))
+HTT.plot.fin<-merge(HTT.plot.melted, pData(cortexDat.CGA), by.x = "variable", by.y = "Sample_Name")
+HTT.plot.fin$Site<-as.factor(HTT.plot.fin$Site)
+HTT.plot.fin$Site<-factor(HTT.plot.fin$Site, levels=HTT.plot.fin$Site[order(HTT.plot.fin$Coord)])
+
+# scatterplot for all DNA methylation values for each of the 87 probes underlying candidate HTT gene region
+ggplot(HTT.plot.fin, aes(as.factor(Site), value, group = Disease_status, color = Disease_status)) + geom_point(position=position_dodge(width=0.8), shape=19, size = 1.5) + theme_bw() + scale_color_manual(values=c("goldenrod","darkmagenta"), name="Disease Status") + xlab("Site") + ylab("DNA Methylation") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+### D. Epigenome-wide association (EWA)
+
+We will now take a epigenome-wide approach (EWA) to see if there are any significant associations between methylation status at a particular CpG site and HD status. Our specific research question is as follows (as defined by Rebecca):
+
+Question 3: Are there global methylation changes between HD and control Cortex samples. Use all the cortex samples.
+
+We will now perform linear regression analysis to see if there are differential methylation levels for any of the 437,035 probes across the genome between HD and control cortex samples. 
+
+```{r}
+### use limma to do linear regression analysis
+## generate model matrix
+(design.all <- model.matrix(~ Disease_status, cortexDat)) # note that control samples are the reference (coded as 0) while the HD samples are coded as 1. We are performing simple linear regression analysis
+
+cortex.DNAm.all <- exprs(cortexDat)[,rownames(design.all)] # Forces cortex.DNAm.all object to contain only the samples which are present in the design matrix (note must use logit-transformed beta values = M values as they have equal variance and are homoscedastic which is one of the assumptions for linear regression)
+all(row.names(design.all)==colnames(cortex.DNAm.all))  # TRUE - check if all design matrix and methylation matrix are the same size
+
+## fit the model
+fit.EWA <- lmFit(cortex.DNAm.all, design.all)
+## moderated variances estimated by eBays
+FitEB.EWA <- eBayes(fit.EWA)
+colnames(FitEB.EWA)
+## generate topTable linear regression outputs
+topT.EWA <- topTable(FitEB.EWA, coef = "Disease_statusHD", adjust = "BH", number = Inf)
+head(topT.EWA)
+# ## Make a basic volcano plot
+# call.hits<-function(x){
+#   if(topT.EWA$P.Value[x]<= 0.05 & abs(topT.EWA$logFC[x])>=0.5){
+#     "hit"}
+#   else{
+#     "non-hit"
+#   }
+#   }
+# hits<-unlist(lapply(1:nrow(topT.EWA), call.hits))
+# head(hits,10L)
+# topT.EWA$hits<-hits
+# ggplot(topT.EWA, aes(x=logFC, y=-log10(P.Value), color=hits, alpha = hits)) + geom_vline(xintercept=c(-0.5,0.5), color="darkgrey") + geom_hline(yintercept=(-log10(0.05)), color="darkgrey") + geom_point(shape=19) + theme_bw() +
+#   scale_color_manual(values=c("deeppink1", "seashell4")) + scale_alpha_manual(values=c(1, 0.15)) + guides(colour= guide_legend(override.aes=list(alpha = 1)))
+
+## Delta beta between groups (HD cases vs controls)
+betas_cortex<-betas(cortexDat)
+meta_cortex<-pData(cortexDat)
+identical(colnames(betas_cortex), rownames(meta_cortex)) # TRUE
+meta_cortex$Disease_status<-as.factor(meta_cortex$Disease_status)
+str(meta_cortex)
+Cases_AvgB<-rowMeans(betas_cortex[,which(meta_cortex$Disease_status=="HD")], na.rm=T)
+Controls_AvgB<-rowMeans(betas_cortex[,which(meta_cortex$Disease_status=="Control")], na.rm=T)
+deltabeta<-Cases_AvgB-Controls_AvgB
+head(Delta.Beta.df<-data.frame(Probe=rownames(betas_cortex), Delta.Beta=deltabeta))
+
+```
+
+We will plot the p-value distribution of this model:
+
+```{r}
+(Disease.Pvalplot <- ggplot(topT.EWA, aes(x = P.Value)) + geom_histogram(aes(y = ..density..), binwidth = 0.05, colour = "blue", fill = "lightskyblue", alpha = 0.5) + geom_density(size = 1) +theme_bw() + xlab("unadjusted P-value") + ylab("Frequency"))
+```
+
+We can see that the unadjusted p-value distribution is predominantly uniform indicating there are likely no significant hits as specified by our model. 
+
+We will examine sample-to-sample correlations of the methylation levels of these 427,242 probes using cluster analysis:
+
+```{r}
+cor.cortex.all <- cor(exprs(cortexDat), use = "pairwise.complete.obs")
+heatmap.2(cor.cortex.all,main = "Correlation of samples - 427,242 probes",
+          trace = "none", col = BuPu(256), dendrogram = "both",
+          cexRow=0.8,ColSideColors = diseaseCol, RowSideColors = diseaseCol, cexCol = 0.8)
+legend("topright", bty="n", legend = c("Control", "HD"),fill = c("goldenrod","darkmagenta"), horiz = T)
+```
+
+Again, we can see that the sample-to-sample correlation based on the methylation levels of the 427,424 sites across the genome do not show any discernible clustering based on HD disease status. 
+
+##### Look at effect of age of onset to DNA methylation variation in HD samples only
+
+Based on PCA, we observed that age of onset is significantly correlated to DNA methylation PC4 (comprising 14.5% of the DNAm variance, p = 0.048). We wish to assess if there are any DNA methylation alterations that are associated with age of onset (adjusted for sex) in the HD cases. Note that since it is well-published that age of onset and HD CAG length are highly correlated (correlation coefficient = -0.65, p < 0.0001, Stine et al. 1993 Human Molecular Genetics, correlation coefficient = -0.75, p < 0.0001, Duyao et al. 1993 Nature Genetics), I cannot include both terms in a linear model (as they are not independent). Also note that I individually tested chip and neuron by themeselves in separate models but did not see any hits so they were not included as covariates in the model. When I tested sex on its own in a linear model, I did get significant hits so I included it as a covariate. Note that I did test an interaction model of age_onset*sex but did not get any significant hits from the interaction term so did not use an interaction model (only used sex as an adjustment covariate). 
+
+```{r}
+HD.cases<-grep("HD", colnames(cortexDat))
+
+# subset out HD cases
+HD.cortexDat.cor<-cortexDat[,HD.cases]
+dim(HD.cortexDat.cor) # probes = 427242, samples= 7 
+HD.names<-sampleNames(HD.cortexDat.cor)
+HD.cortexDes.cor<-pData(cortexDat)[HD.names,]
+identical(colnames(exprs(HD.cortexDat.cor)), rownames(HD.cortexDes.cor)) # TRUE
+sampleNames(HD.cortexDat.cor)
+
+
+### use limma to do linear regression analysis
+## generate model matrix
+(design.HD <- model.matrix(~ Age_Onset + Sex, HD.cortexDes.cor)) # note that control samples are the reference (coded as 0) while the HD samples are coded as 1. We are performing simple linear regression analysis
+cortex.DNAm.HD <- exprs(HD.cortexDat.cor)[,rownames(design.HD)] # Forces cortex.DNAm.all object to contain only the samples which are present in the design matrix (note must use logit-transformed beta values = M values as they have equal variance and are homoscedastic which is one of the assumptions for linear regression)
+all(row.names(design.HD)==colnames(cortex.DNAm.HD))  # TRUE - check if all design matrix and methylation matrix are the same size
+
+## fit the model
+fit.EWA.HD <- lmFit(cortex.DNAm.HD, design.HD)
+## moderated variances estimated by eBays
+FitEB.EWA.HD <- eBayes(fit.EWA.HD)
+colnames(FitEB.EWA.HD)
+## generate topTable linear regression outputs
+topT.EWA.HD <- topTable(FitEB.EWA.HD, coef = "Age_Onset", adjust = "BH", number = Inf)
+head(topT.EWA.HD)
+
+# plot p-value distribution
+(HD.Pvalplot <- ggplot(topT.EWA.HD, aes(x = P.Value)) + geom_histogram(aes(y = ..density..), binwidth = 0.05, colour = "#2ca25f", fill = "#99d8c9", alpha = 0.5) + geom_density(size = 1) +theme_bw() + xlab("unadjusted P-value") + ylab("Frequency"))
+
+
+# investigate the relationship between HD CAG length and Age_Onset
+shapiro.test(HD.cortexDes.cor$HD_CAG_length) # p-value = 0.003 which is < 0.05; conclude that distribution is not normal
+shapiro.test(HD.cortexDes.cor$Age_Onset) # p-value = 0.56 which is > 0.05; conclude that distribution is normal
+
+cor.test(HD.cortexDes.cor$HD_CAG_length,HD.cortexDes.cor$Age_Onset, method="spearman", exact = T) # rho = -0.741, p = 0.057
+ggplot(HD.cortexDes.cor, aes(Age_Onset, HD_CAG_length)) +
+    geom_point(shape=19, size = 4) + # Use hollow circles
+    geom_smooth(method=lm,   # Add linear regression line
+                se=FALSE) +
+  theme_bw() + xlab("Age of onset") + ylab("HD CAG repeat length")
+
+```
+The p-value looks very favourable---there is an expectation of hits but likely cannot pass the multiple testing barrier. So will pre-filter probes based on variability (reference range >= 0.05) and run individual linear models for only variable probes. 
+
+```{r}
+Variability<-function(x) {quantile(x, c(0.9), na.rm=T)[[1]]-quantile(x, c(0.1), na.rm=T)[[1]]}
+HD.betas.cortexDat<-betas(HD.cortexDat.cor)
+HD.cortexDat.variability<-sapply(1:nrow(HD.betas.cortexDat), function(y) Variability(HD.betas.cortexDat[y,]))
+HD.var.dat<-data.frame(Site=as.character(rownames(HD.betas.cortexDat)), Ref_Range = HD.cortexDat.variability)
+str(HD.var.dat)
+HD.variable.probes<-HD.var.dat[which(HD.var.dat$Ref_Range>=0.05),] # threshold for variable probes are those with >= 0.05 reference range
+dim(HD.variable.probes) # 83,939 variable probes
+
+# subset out variable probes from M-value matrix
+HD.DNAm.var<-cortex.DNAm.HD[HD.variable.probes$Site,]
+
+design.HD
+dim(HD.DNAm.var) # 83939 variable probes, samples = 7
+p<-sapply(1:nrow(HD.DNAm.var), function(x) {z<-lm(unlist(HD.DNAm.var[x,]) ~  HD.cortexDes.cor$Age_Onset + HD.cortexDes.cor$Sex)
+                                                  coef(summary(z))["HD.cortexDes.cor$Age_Onset", "Pr(>|t|)"]})
+
+lm.var.results<-data.frame(Site=rownames(HD.DNAm.var), p.value=p)
+lm.var.results$adj.pval<-p.adjust(p, method = "BH")
+lm.var.results.ordered<-lm.var.results[order(lm.var.results$adj.pval),]
+head(lm.var.results.ordered)
+```
+
+We can conclude that even after pre-filtering for variable probes, there were no probed DNA methylation sites that were significantly associated with age of onset (after adjustment for sex) in the HD cortex samples.
+
+### E. Bumphunting to identify differentially methylated regions
+
+We will use a method (ie Bumphunting) developed by Jaffe et al. 2012, *Int J Epidem* to search for differentially methylated regions (DMRs). This is different than the probe-wise regression modeling done above in which we were trying to identify specific CpG sites that are differentially methylated. Here we are trying to identify genomic regions that exhibit differential DNA methylation patterns in HD cases vs control cortex samples. 
+
+```{r}
+### Bumphunting script adapted from Elodie and Meaghan's analyses
+
+## install and load charm package
+# source("http://bioconductor.org/biocLite.R") 
+# biocLite("charm")
+library("charm")
+
+## order by chromosome location
+dim(cortex.DNAm.all) # probes = 427242  n = 13
+ex<- cortex.DNAm.all
+ex.ord <- ex[order(fData(cortexDat)$CHR, fData(cortexDat)$MAPINFO),]
+probes.ord <- rownames(ex.ord)
+
+## ordered probe annotations
+chr = fData(cortexDat[probes.ord,])$CHR
+chr <- paste("chr", chr, sep="")
+pos = fData(cortexDat[probes.ord,])$MAPINFO
+seq = fData(cortexDat[probes.ord,])$ALLELEA_PROBESEQ
+pd = pData(cortexDat[probes.ord,])
+
+## redefine array regions given chromosomal coordinates
+pns = clusterMaker(chr,pos) # note: default argument maxGap = 300 which is the maximum allowable gap between probe start positions for probes to be grouped into the same region
+
+## generate model matrix for regression analyses
+mod0 = matrix(1,nrow=nrow(pd),ncol=1)
+mod = model.matrix(~ Disease_status, cortexDat)
+
+### omit SVA & use Limma for linear modeling 
+thedmrs2 = dmrFind(logitp=ex.ord, svs=0, mod=mod, mod0=mod0, coeff=2, pns=pns, chr=chr, pos=pos, use.limma=TRUE) # Found 24 potential DMRs
+
+## Obtain False Discovery Rate q-values estimated by a resampling procedure
+withq2 = qval(logitp=ex.ord, dmr=thedmrs2, numiter=1000, mc=1, return.permutations=TRUE)
+
+## save output
+HTT_Leavitt.dmrs<-withq2$q
+head(HTT_Leavitt.dmrs)
+# write.csv(HTT_Leavitt.dmrs, file="bumph_HTT_Leavitt.csv")
+
+## Use CHARM to plot some of these bumps
+# cpg.cur = read.delim("http://rafalab.jhsph.edu/CGI/model-based-cpg-islands-hg19.txt", as.is=TRUE)
+# source("plotRegionsCustom.R")
+# betas.cortex<- betas(cortexDat)
+# 
+# region <- data.frame("chr1",205818668,205819609)
+# colnames(region) <- c("chr","start","end")
+# rownames(region) <- "DMR40"
+# pVal<- thedmrs2$pval[2]
+# 
+# ### custom function adapted from charm
+# file_name=paste(rownames(region),"_region.png", sep="")
+# plotRegionsCustom(thetable=region, cleanp=betas.cortex, chr=chr, pos=pos, Genome=Hsapiens, cpg.islands=cpg.cur, outfile=file_name, exposure=pd$Disease_status, exposure.continuous=FALSE, panel3="PValues", pval=pVal, Th=0.05)
+# plotRegionsCustom(thetable=region, cleanp=betas.cortex, chr=chr, pos=pos, Genome=Hsapiens, cpg.islands=cpg.cur, outfile=file_name, exposure=pd$Disease_status, exposure.continuous=FALSE, Th=0.05)
+```
+
+We can see that none of the 24 DMRs identified by Bumphunting are statistically significant (at FDR = 0.05). Thus, we conclude that there are no significant DMRs due to HD status identified in the genome for this dataset by BumpHunting. 
+
+### F. Assess differences in DNA methylation variablity in cortex-only dataset at the candidate HTT locus
+
+```{r}
+# get separate beta matrix for controls and HD cases in HTT candidate region
+controls<-grep("COB", colnames(betas.HTT))
+head(betas.HTT.controls<-betas(cortexDat.CGA)[,controls])
+HDcases<-grep("HDB", colnames(betas.HTT))
+head(betas.HTT.HD<-betas(cortexDat.CGA)[,HDcases])
+
+# compute variability for cases and controls
+Variability<-function(x) {quantile(x, c(0.9), na.rm=T)[[1]]-quantile(x, c(0.1), na.rm=T)[[1]]}
+HD.variability<-sapply(1:nrow(betas.HTT.HD), function(y) Variability(betas.HTT.HD[y,]))
+control.variability<-sapply(1:nrow(betas.HTT.controls), function(y) Variability(betas.HTT.controls[y,]))
+var.dat<-data.frame(Site=rownames(betas.HTT.controls), Ref_Range_controls = control.variability, Ref_Range_HD = HD.variability)
+head(var.dat)
+
+# compare variability between cases and controls using Wilcox signed rank test
+wilcox.test(var.dat$Ref_Range_controls, var.dat$Ref_Range_HD, paired=TRUE) # no significant differences in DNAm variability between cases and controls in the HTT gene region
+
+# compare variability using Levene's test
+mvals<-exprs(cortexDat.CGA)
+metadata<-pData(cortexDat.CGA)
+metadata$Disease_status<-as.factor(metadata$Disease_status)
+pvals_LEVENE <- sapply(1:nrow(mvals), function(x) {
+  z <- leveneTest(mvals[x,] ~ Disease_status, data = metadata)
+  z[1,3]})
+
+adj.pvals<-p.adjust(pvals_LEVENE, method="BH")
+levene.results<-data.frame(Site=rownames(betas.HTT.controls), p.val=pvals_LEVENE, adj.pvals=adj.pvals)
+count(levene.results$adj.pvals<0.05) # no sites with significantly different reference ranges between cases and controls
+```
+Based on our assessment of variability, we conclude there is no signifcant difference in variability in DNAm of sites across the HTT gene region, according to the Levene's test and wilcox signed rank test of reference range measures. 
+

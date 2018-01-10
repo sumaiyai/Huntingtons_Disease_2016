@@ -1,0 +1,221 @@
+HTT_Leavitt Epigenetic Age Analysis
+====================================================================
+## By: Sumaiya Islam
+## Date: June 15, 2015
+
+### Script contents:
+- Assessment of 'epigenetic age' (Horvath et al. 2013, Genome Biol) to see if DNA methylation age differs between cortex vs. liver of HD cases vs. controls
+
+### A. Set up wd & packages
+
+We will initially set up our working directory and load our libraries.
+```{r include=FALSE}
+setwd("/home/sislam/HTT_Leavitt")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library("RColorBrewer")
+library(knitr)
+library(xtable)
+library(limma)
+library(ggplot2)
+library(reshape)
+```
+
+### B. Load data
+
+We will load the raw data (un-normalized) for the cortex-only and matched datasets
+
+```{r load_data}
+
+## Generate raw complete methylumi object from Genome Studio exports
+# get GS exports
+sampleFile <- ("HTT_Leavitt_samplesheet_corrected.txt")  
+allFile <- ("HTT_Leavitt.alldata.GS.txt") 
+betaFile <- ("HTT_Leavitt.avgbeta.GS.txt") 
+qcFile <- ("HTT_Leavitt.qc.GS.txt") 
+file.exists(allFile)
+file.exists(betaFile)
+file.exists(qcFile)
+file.exists(sampleFile)
+# generate methylumi object
+HTT_Leavitt<- lumiMethyR(allFile) # probes = 485,577, n = 18
+# input meta data
+str(sampleInfo <- read.delim(sampleFile,row.names=1,stringsAsFactors=F))
+stopifnot(all(sampleNames(HTT_Leavitt)%in%rownames(sampleInfo)))
+sampleInfo <- sampleInfo[sampleNames(HTT_Leavitt),]
+# re-structure meta data
+str(pData(HTT_Leavitt) <- sampleInfo)
+pData(HTT_Leavitt)$Sample_Group<- as.factor(pData(HTT_Leavitt)$Sample_Group)
+pData(HTT_Leavitt)$Sex<- as.factor(pData(HTT_Leavitt)$Sex)
+pData(HTT_Leavitt)$Disease_status<- as.factor(pData(HTT_Leavitt)$Disease_status)
+pData(HTT_Leavitt)$Age_Death<- as.numeric(pData(HTT_Leavitt)$Age_Death)
+str(pData(HTT_Leavitt))
+identical(rownames(pData(HTT_Leavitt)), colnames(exprs(HTT_Leavitt))) # TRUE
+sampleNames(HTT_Leavitt)<-c("COB05_Cortex", "HDB176_Cortex","COB_22_52_Cortex", "HDB167_Cortex","HDB162_Cortex", "COB51_Cortex",     "HDB119_Cortex", "HDB166_Cortex",  "COB125_Cortex","COB20_30_Cortex","COB59_Cortex",   "HDB159_Cortex","HDB165_Cortex","COB51_Liver",    
+"HDB119_Liver",  "HDB162_Liver",  "HDB176_Liver", "HDB167_Liver") 
+identical(sampleNames(HTT_Leavitt), rownames(pData(HTT_Leavitt))) # TRUE
+
+## generate cortex-only dataset
+# subset cortex samples
+cortex.samples<- grep("Cortex", HTT_Leavitt$Sample_Group)
+HTT_Leavitt.cortex<-HTT_Leavitt[,cortex.samples]
+dim(HTT_Leavitt.cortex) # probes = 485,577  n = 13
+meta.cortex<-pData(HTT_Leavitt.cortex)
+head(betas.cortex<-betas(HTT_Leavitt.cortex))
+# write.csv(betas.cortex, file="Betas_cortex.csv")
+
+
+
+## generate matched dataset
+matched.samples<- c("HDB119_Cortex", "HDB119_Liver", "COB51_Cortex", "COB51_Liver", "HDB167_Cortex", "HDB167_Liver", "HDB176_Cortex", "HDB176_Liver", "HDB162_Cortex", "HDB162_Liver")
+HTT_Leavitt.Matched<-HTT_Leavitt[,matched.samples] # probes= 437035, n = 10
+dim(HTT_Leavitt.Matched) # probes = 485,577  n = 10
+meta.matched<-pData(HTT_Leavitt.Matched)
+head(betas.matched<-betas(HTT_Leavitt.Matched))
+# write.csv(betas.matched, file="Betas_matched.csv")
+```
+
+### C. Re-shape beta data put input into epigenetic age calculator
+
+```{r}
+# re-format cortex-only dataset
+library(sqldf)
+#change the setwd filepath to that of the folder with your data. Note the forward slash
+setwd("/home/sislam/HTT_Leavitt")
+betas.cortex.df<-as.data.frame(betas.cortex)
+Probe_ID<-rownames(betas.cortex) # character vector of length 485,577
+dat0<-cbind(Probe_ID,betas.cortex.df)
+str(dat0)
+datMiniAnnotation=read.csv("datMiniAnnotation.csv")
+match1=match(datMiniAnnotation[,1], dat0[,1])
+dat0Reduced=dat0[match1,]
+head(dat0Reduced)
+dat0Reduced[,1]=as.character(dat0Reduced[,1])
+dat0Reduced[is.na(match1),1]=as.character(datMiniAnnotation[is.na(match1),1])
+datout=data.frame(dat0Reduced)
+# make sure you output numeric variables...
+for (i in 2:dim(datout)[[2]]  ){datout[,i]= 
+as.numeric(as.character(gsub(x=datout[,i],pattern="\"",replacement=""))) }
+head(datout)
+str(datout)
+# write.table(datout,"Betas.cortex.Horvath.csv", row.names=F, sep="," )
+
+# re-format matched dataset
+betas.matched.df<-as.data.frame(betas.matched)
+Probe_ID<-rownames(betas.matched) # character vector of length 485,577
+dat0<-cbind(Probe_ID,betas.matched.df)
+str(dat0)
+datMiniAnnotation=read.csv("datMiniAnnotation.csv")
+match1=match(datMiniAnnotation[,1], dat0[,1])
+dat0Reduced=dat0[match1,]
+head(dat0Reduced)
+dat0Reduced[,1]=as.character(dat0Reduced[,1])
+dat0Reduced[is.na(match1),1]=as.character(datMiniAnnotation[is.na(match1),1])
+datout=data.frame(dat0Reduced)
+# make sure you output numeric variables...
+for (i in 2:dim(datout)[[2]]  ){datout[,i]= 
+as.numeric(as.character(gsub(x=datout[,i],pattern="\"",replacement=""))) }
+head(datout)
+str(datout)
+#replace "MethylationData" with a filename of your choice
+# write.table(datout,"Betas.matched.Horvath.csv", row.names=F, sep="," )
+```
+
+### D. Select needed variables for meta data to input into epigenetic age calculator
+```{r}
+## for cortex only dataset meta data
+colnames(meta.cortex)
+meta.cortex$Sample_Name<-rownames(meta.cortex)
+meta.cortex.Horvath<-subset(meta.cortex, select=c("Sample_Name","Age_Death", "Sex", "Sample_Group"))
+# re-format data according to Horvath's specifications in http://labs.genetics.ucla.edu/horvath/dnamage/TUTORIALonlineCalculator.pdf
+colnames(meta.cortex.Horvath)<-c("Sample_ID","Age", "Female", "Tissue")
+meta.cortex.Horvath$Female<-gsub("F", "1", gsub("M", "0", meta.cortex.Horvath$Female))
+meta.cortex.Horvath$Female<-as.numeric(meta.cortex.Horvath$Female)
+meta.cortex.Horvath$Tissue<-"Brain FCTX" 
+identical(colnames(betas.cortex), meta.cortex.Horvath$Sample_ID) #TRUE
+meta.cortex.Horvath
+# write.table(meta.cortex.Horvath,"Meta.cortex.Horvath.csv", row.names=F, sep=",")
+
+## for matched dataset meta data
+colnames(meta.matched)
+meta.matched.Horvath<-subset(meta.matched, select=c("Sample_Name","Age_Death", "Sex", "Sample_Group"))
+# re-format data according to Horvath's specifications in http://labs.genetics.ucla.edu/horvath/dnamage/TUTORIALonlineCalculator.pdf
+colnames(meta.matched.Horvath)<-c("Sample_ID","Age", "Female", "Tissue")
+meta.matched.Horvath$Female<-gsub("F", "1", gsub("M", "0", meta.matched.Horvath$Female))
+meta.matched.Horvath$Female<-as.numeric(meta.matched.Horvath$Female)
+meta.matched.Horvath$Tissue<-gsub("Cortex", "Brain FCTX", gsub("Liver", "Liver", meta.matched.Horvath$Tissue))
+identical(colnames(betas.matched), meta.matched.Horvath$Sample_ID) #TRUE
+write.table(meta.matched.Horvath,"Meta.matched.Horvath.csv", row.names=F, sep=",")
+```
+
+## E. Analysis of output from online epigenetic age calculator
+
+```{r}
+## load outputs (as csv files)
+cortex.output<-read.csv("CortexDat_DNAm_Age_Analysis_Output.csv", header=T) # cortex dataset analysis
+matched.output<-read.csv("MatchedDat_DNAm_Age_Analysis_Output.csv", header=T) # matched dataset analysis
+
+
+
+### analyze cortex-only dataset output
+## look at DNAm Age
+ggplot(cortex.output, aes(Disease, DNAmAge))+
+  geom_boxplot(aes(fill=Disease),color="black", outlier.shape=NA)+
+  geom_point(shape=21, fill="grey",colour="black", size=4, position=position_jitter(w=0.2))+
+  theme_bw()+xlab("Disease Status")+ylab("Predicted DNA Methylation Age") +ggtitle("Epigenetic Age Analysis of HD cases vs controls cortex samples") + scale_fill_manual(values=c("#d53e4f", "#3288bd"), guide=FALSE) 
+DNAmage.HD<-subset(cortex.output$DNAmAge, cortex.output$Disease=="HD")
+DNAmage.Control<-subset(cortex.output$DNAmAge, cortex.output$Disease=="Control")
+wilcox.test(DNAmage.HD, DNAmage.Control, paired=FALSE) # p-value = 0.6282 (Mann Whitney U test)
+
+## look at Age Acceleration Residual
+ggplot(cortex.output, aes(Disease, AgeAccelerationResidual))+
+  geom_boxplot(aes(fill=Disease),color="black", outlier.shape=NA)+
+  geom_point(shape=21, fill="grey",colour="black", size=4, position=position_jitter(w=0.2))+
+  theme_bw()+xlab("Disease Status")+ylab("Age Acceleration Residual") +ggtitle("Epigenetic Age Analysis of HD cases vs controls cortex samples") + scale_fill_manual(values=c("#d53e4f", "#3288bd"), guide=FALSE) 
+AA.HD<-subset(cortex.output$AgeAccelerationResidual, cortex.output$Disease=="HD")
+AA.Control<-subset(cortex.output$AgeAccelerationResidual, cortex.output$Disease=="Control")
+wilcox.test(AA.HD, AA.Control, paired=FALSE) # p-value = 0.8357 (Mann Whitney U test)
+
+## scatterplot of DNAmAge and Chronological Age (Reported)
+ggplot(cortex.output, aes(Age, DNAmAge)) + geom_point(aes(color = AgeAccelerationResidual)) + geom_smooth(method="lm") +
+  theme_bw()+xlab("Chronological Age")+ylab("DNA Methylation Age") 
+
+# look at epigenetic age in cortex samples of HD cases only
+load("HTT_Leavitt.cortex.cor.final.RData") 
+HD.meta<-subset(pData(HTT_Leavitt.cortex.cor), pData(HTT_Leavitt.cortex.cor)$Disease_status=="HD")
+identical(rownames(HD.meta),as.character(HD.output$Sample_ID)) # TRUE
+colnames(HD.meta)
+HD.output$Age_Onset<-HD.meta$Age_Onset
+## scatterplot of DNAmAge and Chronological Age (Reported)
+ggplot(HD.output, aes(Age_Onset, AgeAccelerationResidual)) + geom_point(aes(fill = DNAmAge), shape=21, size=5)  +
+  theme_bw()+xlab("Age of Disease Onset")+ylab("Age Acceleration Residual") 
+
+### analyze matched-only dataset output
+## look at DNAm Age
+ggplot(matched.output, aes(Tissue, DNAmAge))+
+  geom_boxplot(aes(fill=Tissue),color="black", outlier.shape=NA)+
+  geom_point(aes(shape = Disease),  fill="grey",colour="black", size=4, position=position_jitter(w=0.2))+
+  theme_bw()+xlab("Tissue Type")+ylab("Predicted DNA Methylation Age") +ggtitle("Epigenetic Age Analysis of Cortex vs Liver in Matched Dataset") + scale_fill_manual(values=c("#f1a340", "#998ec3"), guide=FALSE) 
+DNAmage.Cortex<-subset(matched.output$DNAmAge, matched.output$Tissue=="Cortex")
+DNAmage.Liver<-subset(matched.output$DNAmAge, matched.output$Tissue=="Liver")
+wilcox.test(DNAmage.Cortex, DNAmage.Liver, paired=TRUE) # p-value = 1 (Wilcoxon Signed Rank Paired Test)
+
+## look at Age Acceleration Residual
+ggplot(matched.output, aes(Tissue, AgeAccelerationResidual))+
+  geom_boxplot(aes(fill=Tissue),color="black", outlier.shape=NA)+
+  geom_point(aes(shape = Disease),  fill="grey",colour="black", size=4, position=position_jitter(w=0.2))+
+  theme_bw()+xlab("Tissue Type")+ylab("Age Acceleration Residual") +ggtitle("Epigenetic Age Analysis of Cortex vs Liver in Matched Dataset") + scale_fill_manual(values=c("#f1a340", "#998ec3"), guide=FALSE) 
+AA.Cortex<-subset(matched.output$AgeAccelerationResidual, matched.output$Tissue=="Cortex")
+AA.Liver<-subset(matched.output$AgeAccelerationResidual, matched.output$Tissue=="Liver")
+wilcox.test(AA.Cortex, AA.Liver, paired=TRUE) # p-value = 1 (Wilcoxon Signed Rank Paired Test)
+
+## scatterplot of DNAmAge and Chronological Age (Reported)
+ggplot(matched.output, aes(Age, DNAmAge)) + geom_point(aes(color = AgeAccelerationResidual)) + geom_smooth(method="lm") +
+  theme_bw()+xlab("Chronological Age")+ylab("DNA Methylation Age") 
+```
+
+
+

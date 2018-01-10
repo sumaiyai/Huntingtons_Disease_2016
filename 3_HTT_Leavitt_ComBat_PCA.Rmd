@@ -1,0 +1,229 @@
+HTT_Leavitt PCA & ComBat
+========================================================
+## By: Sumaiya Islam
+## Date: August 1, 2015 (note: script was reviewed and updated on March 7, 2016)
+
+### Script contents:
+- PCA comparing the raw and normalized datasets for cortex-only dataset 
+- ComBat to correct technical batch effects for cortex-only dataset 
+##### Note: Since the HTT_Leavitt matched dataset was run on a single chip, in the same batch, we do not need to perform ComBat to correct for technical variation in the matched dataset. However, since the cortex-only dataset was run across two chips, but in the same batch, we do need to perform ComBat to correct for technical variation. 
+
+### A. Set up working directory & packages
+
+
+We will initially set our working directory and load our libraries.
+```{r}
+library(methylumi)
+library(reshape)
+library(ggplot2)
+library(RColorBrewer)
+library(grid)
+library(gridExtra)
+library(sva)
+library(rama)
+```
+
+## Heat scree plot Function
+```{r}
+### Function of association meta variable with PC (ANOVA)
+heat_scree_plot<-function(Loadings, Importance, Num, Order){
+  adjust<-1-Importance[1]
+  pca_adjusted<-Importance[2:length(Importance)]/adjust
+  pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted)))
+  
+  scree<-ggplot(pca_df[which(pca_df$PC<Num),],aes(PC,adjusted_variance))+geom_bar(stat = "identity",color="black",fill="grey")+theme_bw()+
+        theme(axis.text = element_text(size =12),
+              axis.title = element_text(size =15),
+              plot.margin=unit(c(1,1.5,0.2,2.25),"cm"))+ylab("Variance")+
+    scale_x_continuous(breaks = seq(1,Num,1))
+  
+  #### Heat
+  ## correlate meta with PCS
+  ## Run anova of each PC on each meta data variable
+
+  aov_PC_meta<-lapply(1:ncol(meta_categorical), function(covar) sapply(1:ncol(Loadings), function(PC) summary(aov(Loadings[,PC]~meta_categorical[,covar]))[[1]]$"Pr(>F)"[1]))
+   cor_PC_meta<-lapply(1:ncol(meta_continuous), function(covar) sapply(1:ncol(Loadings), function(PC) (cor.test(Loadings[,PC],as.numeric(meta_continuous[,covar]),alternative = "two.sided", method="spearman", na.action=na.omit)$p.value)))
+  names(aov_PC_meta)<-colnames(meta_categorical)
+  names(cor_PC_meta)<-colnames(meta_continuous)
+  aov_PC_meta<-do.call(rbind, aov_PC_meta)
+  cor_PC_meta<-do.call(rbind, cor_PC_meta)
+  aov_PC_meta<-rbind(aov_PC_meta, cor_PC_meta)
+  aov_PC_meta<-as.data.frame(aov_PC_meta)
+  #adjust
+  aov_PC_meta_adjust<-aov_PC_meta[,2:ncol(aov_PC_meta)]
+  
+    
+  #reshape
+  avo<-aov_PC_meta_adjust[,1:(Num-1)]
+  avo_heat_num<-apply(avo,2, as.numeric)
+  avo_heat<-as.data.frame(avo_heat_num)
+  colnames(avo_heat)<-sapply(1:(Num-1), function(x) paste("PC",x, sep=""))
+  avo_heat$meta<-rownames(avo)
+  avo_heat_melt<-melt(avo_heat, id=c("meta"))
+  
+  # cluster meta data
+  ord <- Order
+  meta_var_order<-unique(avo_heat_melt$meta)[rev(ord)]
+  avo_heat_melt$meta <- factor(avo_heat_melt$meta, levels = meta_var_order)
+  
+  # color if sig
+  # avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]>=0.9){">=0.9"}else{
+   # if(avo_heat_melt$value[x]>=0.5){">=0.5"}else{
+     # if(avo_heat_melt$value[x]>=0.1){">=0.1"}else{"<0.1"}}})
+  avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]<=0.001){"<=0.001"}else{
+     if(avo_heat_melt$value[x]<=0.01){"<=0.01"}else{
+       if(avo_heat_melt$value[x]<=0.05){"<=0.05"}else{">0.05"}}})
+  
+  heat<-ggplot(avo_heat_melt, aes(variable,meta, fill = Pvalue)) +
+  geom_tile(color = "black",size=0.5) +
+  theme_gray(8)+scale_fill_manual(values=c("#084594","#4292c6","#9ecae1","#deebf7"))+
+      theme(axis.text = element_text(size =10, color="black"),
+            axis.text.x = element_text(),
+          axis.title = element_text(size =15),
+          legend.text = element_text(size =14),
+          legend.title = element_text(size =12),
+          legend.position = c(1, 0), legend.justification = c(1,0),
+          plot.margin=unit(c(0,2.25,1,1),"cm"))+
+    xlab("Principal Component")+ylab(NULL)
+  
+  grid.arrange(scree, heat, ncol=1)
+}
+```
+
+
+### B. Load files
+
+#### We will be analyzing the raw and normalized datasets for the cortex-only dataset
+
+```{r}
+
+load("HTT_Leavitt.cortex.norm.RData") # normalized data for cortex-only dataset
+# check for NAs in data
+ind<-is.row.na(betas(HTT_Leavitt.cortex.swan)) # The function returns a vector of logical variables, one for each row of the matrix. The variable is TRUE if the row does not contain any missing values and FAlSE otherwise.
+length(na.count<-which(ind=="FALSE")) # 0 (there are no rows that contain a NA in the raw data)
+```
+
+
+## PCA Scree Heatmap for raw data for cancer.dat
+
+```{r warning=FALSE, fig.height=9, fig.width=11}
+
+## re-structure meta data: change categorical variables to factors for ANOVA and continuous variables to numeric for Spearman's correlation
+meta.cortex<-pData(HTT_Leavitt.cortex.swan)
+str(meta.cortex)
+
+## PCA 
+betas.cortex<-betas(HTT_Leavitt.cortex.swan)
+PCA_full<-princomp(betas.cortex[complete.cases(betas.cortex),]) # scaling is not necessary for normalized dataset
+Loadings<-as.data.frame(unclass(PCA_full$loadings))                                                                                                                                                                                                                vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+
+
+#Specify which covariates are categorical and/or categorical
+# structure meta data appropriately
+colnames(meta.cortex)
+meta.cortex$Sentrix_ID <- as.factor(meta.cortex$Sentrix_ID)
+meta.cortex$Sentrix_Position <- as.character(meta.cortex$Sentrix_Position)
+meta.cortex$Sample_Group <- as.factor(meta.cortex$Sample_Group)
+meta.cortex$Sex<- as.factor(meta.cortex$Sex)
+meta.cortex$Disease_status <- as.factor(meta.cortex$Disease_status)
+meta.cortex$HD_CAG_length <- as.numeric(meta.cortex$HD_CAG_length) 
+meta.cortex$WT_CAG_length <- as.numeric(meta.cortex$WT_CAG_length)
+meta.cortex$Age_Death <- as.numeric(meta.cortex$Age_Death)
+meta.cortex$Age_Onset  <- as.numeric(meta.cortex$Age_Onset)
+# for Row
+for (i in 1:nrow(meta.cortex)){
+  meta.cortex$Row[i]<-paste(substr(meta.cortex[i,"Sentrix_Position"], start=1, stop=3))
+}
+meta.cortex$Row <- as.factor(meta.cortex$Row)
+str(meta.cortex)
+
+# pull out variables to associate with PCs
+meta_categorical<-meta.cortex[,c("Disease_status", "Sex", "Sentrix_ID", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-meta.cortex[,c("HD_CAG_length", "WT_CAG_length",  "Age_Death", "Age_Onset")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Disease status","Sex", "Chip", "Row")
+colnames(meta_continuous)<-c("HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset")
+
+# Specifiy the number of PCs you want shown
+Num<-13
+
+# Designate what order you want the variables to appear (continuous variables rbinded to categorical variables in function)
+Order<-1:8
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+```
+
+
+We can observe that there are some chip-to-chip effects since chip is correlated with PC9. Accordingly, we need to correct for chip using Combat. There does not appear to be any row effects so we will not correct for row using Combat.
+
+Note that there is there is ~30% of the DNA methylation variation in PC1 that is not accounted for by any of the variables listed here. This 30% variance is likely due to brain cell type proportion differences which we will investigate using a brain cell type deconvolution method. Also note that age of death correlates with PC2 and sex is correlated with PC4. We will look more closely at the association of these biological variables to PCs after cell type correction. 
+
+### B. ComBat 
+
+We will apply ComBat to the normalized dataset containing the cortex samples only (which were run across the two batches). ComBat uses an empirical Bayesian (EB) estimates the Location(mean)/Scale(variance) model parameters that represent the batch effects by “pooling information” across genes in each batch to “shrink” the batch effect parameter estimates toward the overall mean of the batch effect estimates (across genes). These EB estimates are then used to adjust the data for batch effects, providing more robust adjustments for the batch effect on each gene.
+
+According to the creators of the SVA package, we can pre-set which variable(s) of interest to protect from ComBat correction. We will only protect Disease_status as that is our main variable of interest. We will specifically correct for chip effects.
+
+
+```{r echo=FALSE}
+
+preComBat_Batch.datM <- exprs(HTT_Leavitt.cortex.swan) # ComBat must be applied to M-values from normalized dataset
+mod <- model.matrix(~ Disease_status, data=meta.cortex)
+Combat_Batch.dat <- ComBat(dat=preComBat_Batch.datM, batch=meta.cortex$Sentrix_ID, mod=mod)
+
+
+### fill in the slot of the methylumi object with ComBat file
+Combat_1<-HTT_Leavitt.cortex.swan
+identical(rownames(exprs(Combat_1)), rownames(Combat_Batch.dat))
+exprs(Combat_1) <- Combat_Batch.dat
+
+# pull needed data for PCA from ComBat 1 methylumi object
+Beta_Data<-betas(Combat_1)
+```
+
+### C. PCA for Combat (Batch effect corrected) Data
+
+## Run PCA and apply the heat_scree plot function
+```{r warning=FALSE, fig.height=9, fig.width=11}
+## PCA
+PCA_full<-princomp(Beta_Data[complete.cases(Beta_Data),]) # scaling is not necessary for normalized dataset
+Loadings<-as.data.frame(unclass(PCA_full$loadings))
+vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+
+#Specify which covariates are categorical and/or categorical
+meta_categorical<-meta.cortex[,c("Disease_status", "Sex", "Sentrix_ID", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-meta.cortex[,c("HD_CAG_length", "WT_CAG_length",  "Age_Death", "Age_Onset")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Disease status","Sex", "Chip", "Row")
+colnames(meta_continuous)<-c("HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset")
+
+# Specifiy the number of PCs you want shown
+Num<-13
+
+# Designate what order you want the variables to appear (continuous variables rbinded to categorical variables in function)
+Order<-1:8
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order) 
+```
+
+We can see that chip effects have been largely removed from the methylation data. (ie only associate with last PC accounting for only 1.98% of the variance). No row effects are observed.  
+
+### D. Save Combat corrected data
+```{r}
+HTT_Leavitt.cortex.combat_copy<-Combat_1
+dim(HTT_Leavitt.cortex.combat_copy) # probes = 437,035 n = 13
+# save(HTT_Leavitt.cortex.combat_copy, file="HTT_Leavitt.cortex.combat_copy.RData")
+colnames(exprs(HTT_Leavitt.cortex.combat_copy))
+```
+
+We will carry on with cell type correction of the cortex samples in the next script. 

@@ -1,0 +1,457 @@
+HTT_Leavitt Preprocessing (Revised)
+========================================================
+## Author: Sumaiya Islam
+## Date: June 5, 2014
+
+### A. Set up wd & packages
+
+Use R.2.14
+
+We will initially set our working directory and load our libraries.
+```{r HTT_Leavitt_setup, include = FALSE, echo=FALSE}
+setwd("/home/sislam/HTT_Leavitt")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library("RColorBrewer")
+library(knitr)
+library(xtable)
+```
+
+The **methylumi** package is required for loading and manipulating the Illumina methylation data. It is built to contain sample information, feature information, and multiple matrices of data (beta and transformed M-values) along with background correction and quality control features.
+
+The **lumi** package is also important for processing Illumina 27K and 450K methylation microarray data. 
+
+### B. Load files
+
+Four files are required for our analysis:
+- **sampleFile** contains all the sample information and variables. It can be produced in Excel. The variables contained in our study include tissue, sex, age of onset, Sentrix ID (chip barcode) and Sentrix Position (row and column position on the chip), etc. The sampleFile must contain a "SampleID" column which is the same as sample ID, except without "rep" for replicates in order to utilize the methylumi and lumi packages.
+- **allFile** is generated in GenomeStudio.  It contains all probe annotation information (both Illumina's and reannotation file produced in Price et al. 2013 *Epigenetics*), and the following subcolumns for all samples: average beta, detection Pval, signal A, and signal B
+- **betaFile** is generated in GenomeStudio.  It contains all probe annotation information, and all samples with only the average beta subcolumn.
+- **qcFile** is generated in GenomeStudio (under the Control Probes profile).  It shows all samples (i.e. all columns), plus subcolumns: signal Grn, signal Red, and detection Pval.
+
+### Note: Quality control steps for colour correction and background subtraction have been performed in GenomeStudio using invariant control probes. The corrected data were exported in the above-mentioned files. 
+
+```{r HTT_Leavitt_fileLoad, echo=FALSE}
+sampleFile <- ("HTT_Leavitt_samplesheet.txt")  
+allFile <- ("HTT_Leavitt.alldata.GS.txt") 
+betaFile <- ("HTT_Leavitt.avgbeta.GS.txt") 
+qcFile <- ("HTT_Leavitt.qc.GS.txt") 
+
+file.exists(allFile)
+file.exists(betaFile)
+file.exists(qcFile)
+file.exists(sampleFile)
+```
+
+Next, we'll make the HTT_Leavitt project (and HTT_Leavitt.2):
+
+```{r HTT_Leavitt_project, echo=FALSE}
+HTT_Leavitt<- lumiMethyR(allFile)
+HTT_Leavitt.2 <- methylumiR(betaFile, qcfile = qcFile)
+
+HTT_Leavitt # probes = 485,577, n = 18
+HTT_Leavitt.2 # probes = 485,577, n = 18
+```
+
+The function *lumiMethyR()* coerces the object (**allFile**) into a **MethyLumiM class object**, which contains those four elements (exprs, methylated, unmethylated, and detection p value).
+
+The function *methylumiR()* coerces the object (**betaFile**) into a **MethyLumiSet class object**, which holds the intensities and the beta values.  This is also where the sample information (the sampleFile) can be added as phenoData.
+HTT_Leavitt.2 contains the information from the control probes, as well as the average beta values for all probes.
+
+### C. Add metadata to HTT_Leavitt
+
+```{r HTT_Leavitt_metadata, echo=FALSE}
+str(sampleInfo <- read.delim(sampleFile,row.names=1,stringsAsFactors=F))
+stopifnot(all(sampleNames(HTT_Leavitt)%in%rownames(sampleInfo)))
+sampleInfo <- sampleInfo[sampleNames(HTT_Leavitt),]
+str(pData(HTT_Leavitt) <- sampleInfo)
+```
+
+First, we've read the sampleFile and made it into a matrix.  The first row of sampleFile becomes the row names of sampleInfo.  The **stringsAsFactors** argument specifies whether R should keep character variables as they are (= FALSE), or to convert them to factors (= TRUE).
+
+We then perform a sanity check to ensure all HTT_Leavitt sample names are equivalent to sampleInfo row names.
+Next, the sampleInfo is reordered to match the sample names of HTT_Leavitt. This is important because we are merging sampleInfo and HTT_Leavitt: sampleInfo becomes HTT_Leavitt's pData (or phenoData, i.e. the phenotypic information about samples in HTT_Leavitt)
+
+```{r HTT_Leavitt_metadata2, echo=FALSE}
+HTT_Leavitt <- HTT_Leavitt[, order(HTT_Leavitt$Sentrix_ID)]
+# write.csv(cor(betas(HTT_Leavitt), use = 'pairwise.complete.obs'), file='C.01 - all sample intercorrelation.csv')
+```
+
+We chose to re-order HTT_Leavitt by Sentrix ID (array chip barcode number), but this could be done for other variables.
+
+We will now subset our methylumi object based on tissue type to generate HTT_Leavitt.Liver and HTT_Leavitt.Cortex. These objects will be examined and utilized in subsequent analyses.
+
+```{r HTT_Leavitt_subset, echo=FALSE}
+# subset liver samples
+liver.samples<- grep("Liver", HTT_Leavitt$Sample_Group)
+HTT_Leavitt.Liver<-HTT_Leavitt[,liver.samples] # probes= 485577, n = 5
+HTT_Leavitt.2.Liver<-HTT_Leavitt.2[,liver.samples] # probes= 485577, n = 5
+
+# subset cortex samples
+cortex.samples<- grep("Cortex", HTT_Leavitt$Sample_Group)
+HTT_Leavitt.cortex<-HTT_Leavitt[,cortex.samples] # probes= 485577, n = 13
+HTT_Leavitt.2.cortex<-HTT_Leavitt.2[,cortex.samples] # probes= 485577, n = 13
+```
+
+### D. Saving HTT_Leavitt and HTT_Leavitt.2
+```{r HTT_Leavitt_save, echo=FALSE}
+ save (HTT_Leavitt, file ='HTT_Leavitt.RData')
+ save (HTT_Leavitt.2, file ='HTT_Leavitt.2.RData')
+```
+
+### E. Preliminary plotting and exploratory analysis
+
+We will generate some preliminary exploratory plots of the data to check for possible outliers or batch effects.
+
+First we plot the sample relations based on MDS (multidimensional scaling) in order to visually investigate the data. We initially color the data according to Sentrix ID in order to assess possible batch effects. We then do a similar assessment, coloring the samples by Sample_Group (which is the tissue source) to investigate any obvious differences from our main variable of interest:
+
+```{r HTT_Leavitt_sentrixMDS, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation (HTT_Leavitt, method = "mds", col = as.character (as.numeric (factor (HTT_Leavitt$Sentrix_ID))))
+legend ("top", legend = levels (factor (HTT_Leavitt$Sentrix_ID)), fill = 1:nlevels (factor (HTT_Leavitt$Sentrix_ID)), horiz = T)
+```
+
+It is apparent that all the liver samples were run on a single chip, while the cortex samples were run across both chips. Moreover, the matched liver and cortex samples were run on the same chip (Sentrix ID 8221916079). This means that we do not have to correct for a potential chip-to-chip effect when comparing the matched liver vs. cortex samples. However, the remaining cortex samples were run on the second chip (Sentrix ID 8221932102). Accordingly, we will need to assess chip-to-chip effects across the cortex samples only. Note that there were no technical replicates which is a drawback in the study design. (note: ignore the gene number given in the title of these MDS plots as they are a built-in feature for the plotSampleRelations source code).
+
+```{r HTT_Leavitt_cortexsentrixMDS, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation (HTT_Leavitt.cortex, method = "mds", col = as.character (as.numeric (factor (HTT_Leavitt.cortex$Sentrix_ID))))
+legend ("top", legend = levels (factor (HTT_Leavitt.cortex$Sentrix_ID)), cex= 0.6, fill = 1:nlevels (factor (HTT_Leavitt.cortex$Sentrix_ID)), horiz = T)
+```
+
+We can see that there seems to somewhat of a chip-to-chip effect in the cortex samples. We will have to correct for this undesired effect by ComBat. 
+
+```{r HTT_Leavitt_tissueMDS, fig.width=8, fig.height=7, echo=FALSE}
+tissueCol <- as.numeric(factor(HTT_Leavitt$Sample_Group))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "mds", col = tissueCol)
+legend("top", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+```
+
+It is apparent that tissue differences (cortex vs liver) comprise a substantial proportion of the variance in the pre-processed methylation data (specified by principal component 1). This is expected given that different cell types are epigenetically distinct and accordingly, exhibit differential methylation profiles. 
+
+```{r HTT_Leavitt_sexMDS, fig.width=8, fig.height=7, echo=FALSE}
+SexCol <- as.numeric(factor(HTT_Leavitt$Sex))
+SexCol <- gsub("1", "gray", gsub("2", "deeppink",  gsub("3", "dodgerblue", SexCol)))
+
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "mds", col = SexCol)
+legend("top", legend = c("Female", "Male", "NA"),fill = c("deeppink","dodgerblue", "gray"), horiz = T)
+```
+
+We can see that sex differences drive the a high proportion of variance in the dataset (after tissue type differences) and comprise principal component 2. 
+
+```{r HTT_Leavitt_cortexsexMDS, fig.width=8, fig.height=7, echo=FALSE}
+SexCol.cortex <- as.numeric(factor(HTT_Leavitt.cortex$Sex))
+SexCol.cortex <- gsub("1", "gray", gsub("2", "deeppink",  gsub("3", "dodgerblue", SexCol.cortex)))
+
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt.cortex, method = "mds", col = SexCol.cortex)
+legend("top", legend = c("Female", "Male", "NA"),fill = c("deeppink","dodgerblue", "gray"), horiz = T)
+```
+
+If we assess the cortex samples only, we can see that sex-related differences in methylation levels drives the greatest variation in the dataset. There seems to be sex-mismatch (COB_22_52_Cortex sample). We will assess this potential sex-mismatch further in the context of the XY probes specifically later in this script.
+
+We also produce a dendogram of the samples as another way to visualize possible chip-to-chip effects.
+
+```{r HTT_Leavitt_rawCluster, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "cluster")
+```
+
+It is apparent that the tissue differences drive the clusters, in which liver samples form one cluster that is disparate from cortex samples, even though the liver samples have matched cortex samples (ie from the same patient). This means that the tissue-to-tissue differences in methylation profile are greater than inter-individual differences in methylation across tissues. 
+
+```{r HTT_Leavitt_cortexCluster, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt.cortex, method = "cluster")
+```
+
+Within the cortex samples only, there does not seem to be much of a differential in methylation between the control vs. HD samples. 
+
+The following heatmap also includes clustering, with colouring for cortex vs liver (just as a preliminary look at whether or not there are any trends in the raw data), as well as for Sentrix ID (to see if there are any obvious chip-related correlations).
+```{r HTT_Leavitt_preprocessHeatmap, fig.width=8, fig.height=7, echo=FALSE}
+tissueCol <- as.numeric(factor(HTT_Leavitt$Sample_Group))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+sentrixCol <- HTT_Leavitt$Sentrix_ID
+sentrixCol <- gsub("8221916079", "lightslateblue", gsub("8221932102",  "darkgreen", sentrixCol))
+
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+cor <- cor(betas(HTT_Leavitt), use = "pairwise.complete.obs")
+
+heatmap.2(cor,main = "Correlation of samples - 485,577 probes",
+          trace = "none", col = BuPu, dendrogram = "both",
+          RowSideColors = sentrixCol, cexRow = 1,
+          ColSideColors = tissueCol, cexCol = 1,
+          keysize = 1)
+legend("topright", bty="n", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+legend("top", bty = "n", title = "Sentrix ID", c("8221916079", "8221932102"), cex = 1, fill = c("lightslateblue","darkgreen"), horiz=T)
+```
+
+There is an obvious differential in methylation patterns based on tissue type (ie cortex vs. liver). Again there do not appear to be any obvious  effects as denoted by the somewhat random distribution of the sentrix IDs. 
+
+The following heatmap of cortex samples only also includes clustering, with colouring for control vs HD (just as a preliminary look at whether or not there are any trends in the raw data), as well as for Sentrix ID (to see if there are any obvious chip-related correlations).
+
+```{r HTT_Leavitt_rawHeatmap, fig.width=8, fig.height=7, echo=FALSE}
+diseaseCol <- as.numeric(factor(HTT_Leavitt.cortex$Disease_status))
+diseaseCol <- gsub("1", "goldenrod",  gsub("2", "darkmagenta", diseaseCol))
+sentrixCol.cortex <- HTT_Leavitt.cortex$Sentrix_ID
+sentrixCol.cortex <- gsub("8221916079", "lightslateblue", gsub("8221932102",  "darkgreen", sentrixCol.cortex))
+
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+cor.cortex <- cor(betas(HTT_Leavitt.cortex), use = "pairwise.complete.obs")
+
+heatmap.2(cor.cortex,main = "Correlation of samples - 485,577 probes",
+          trace = "none", col = BuPu(256), dendrogram = "both",
+          RowSideColors = diseaseCol, cexRow = 0.8,
+          ColSideColors = sentrixCol.cortex, cexCol = 0.8,
+          keysize = 1)
+legend("topright", bty="n", legend = c("Control", "HD"),fill = c("goldenrod","darkmagenta"), horiz = T)
+legend("top", bty = "n", title = "Sentrix ID", c("8221916079", "8221932102"), cex = 1, fill = c("lightslateblue","darkgreen"), horiz=T)
+```
+
+We can see that there isn't an obvious clustering of the samples based on HD vs control methylation patterns. There appears to be some other grouping of the data apparent in the heatmap. It is likely sex differences---we will generate similar heatmap to the one above, colouring by sex instead. 
+
+```{r HTT_Leavitt_sexcortexHeatmap, fig.width=8, fig.height=7, echo=FALSE}
+sexCol.cortex <- as.numeric(factor(HTT_Leavitt.cortex$Sex))
+sexCol.cortex <- gsub("1", "gray",  gsub("2", "deeppink", gsub("3", "dodgerblue", sexCol.cortex)))
+sentrixCol.cortex <- HTT_Leavitt.cortex$Sentrix_ID
+sentrixCol.cortex <- gsub("8221916079", "lightslateblue", gsub("8221932102",  "darkgreen", sentrixCol.cortex))
+
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+cor.cortex <- cor(betas(HTT_Leavitt.cortex), use = "pairwise.complete.obs")
+
+heatmap.2(cor.cortex,main = "Correlation of samples - 485,577 probes",
+          trace = "none", col = BuPu(256), dendrogram = "both",
+          RowSideColors = sentrixCol.cortex, cexRow = 0.8,
+          ColSideColors = sexCol.cortex, cexCol = 0.8,
+          keysize = 1)
+legend("topright", bty="n", legend = c("Male", "Female", "NA"),fill = c("dodgerblue","deeppink", "gray"), horiz = T)
+legend("top", bty = "n", title = "Sentrix ID", c("8221916079", "8221932102"), cex = 1, fill = c("lightslateblue","darkgreen"), horiz=T)
+```
+
+As we expected, the sex differences are driving much of the variation in the methylation data for the cortex samples. We will need to adjust for these effects in our linear regression analyses. 
+
+### F. Probe Filtering
+
+##### Removal of SNP Probes
+
+Here we create a sub-project, **HTT_Leavitt.rs**, containing only information for the probes that are on single-nucleotide polymorphisms (SNPs (n = 65)).  We then remove these probes from **HTT_Leavitt**. We remove the SNP probes as they are used as an internal control to ensure your samples are what you think they are and are not used for any methylation analysis.
+
+```{r HTT_Leavitt_SNPprobes, echo=FALSE}
+HTT_Leavitt.rs <- HTT_Leavitt[substring(featureNames(HTT_Leavitt), 1, 2) == "rs", ] 
+dim(HTT_Leavitt.rs) # SNP probes = 65, n = 18
+HTT_Leavitt <- HTT_Leavitt[substring(featureNames(HTT_Leavitt),1,2) != "rs", ]
+dim(HTT_Leavitt) # probes = 485,512, n = 18
+# save(HTT_Leavitt, file = "HTT_Leavitt(noRS).RData") 
+# save(HTT_Leavitt.rs, file = "HTT_Leavitt(RS).RData")
+```
+
+This cluster plot observes the samples based on the 65 SNP probes alone (i.e. uses the HTT_Leavitt.rs project)
+
+```{r HTT_Leavitt_SNPprobesPlot, fig.width=12, fig.height=10, echo=FALSE}
+plotSampleRelation(HTT_Leavitt.rs,method="cluster", cex=0.7)
+```
+
+We see that the matched liver and cortex samples cluster together based on the 65 SNP probes as we expect.  
+
+##### Removal of XY Probes
+
+Now we do the same thing for probes located on the X and Y chromosomes.  The mini project **HTT_Leavitt.xy** will contain only 11,648 probes; these are the probes we will remove from **HTT_Leavitt**. We remove probes located on the X and Y chromosome in this analysis because unlike autosomes, sex chromosomes are not in equal number between females (XX) and males (XY) and if your cohort is not sex matched you will have a disproportionate number of X vs Y chromosomes present in your analysis throwing off the data of those probes.
+
+```{r HTT_Leavitt_XYprobes, echo=FALSE}
+HTT_Leavitt.xy <- HTT_Leavitt[fData(HTT_Leavitt)$CHR%in%c("X", "Y"), ]
+dim(HTT_Leavitt.xy) # probes = 11,648, n = 18
+HTT_Leavitt <- HTT_Leavitt[!fData(HTT_Leavitt)$CHR%in%c("X", "Y"), ]
+dim(HTT_Leavitt) # probes = 473,864, n = 18
+# save(HTT_Leavitt, file = "HTT_Leavitt(noXY).RData")
+# save(HTT_Leavitt.xy, file = "HTT_Leavitt(XY).RData")
+```
+
+We re-make a MDS plot now that XY probes are removed; it should look different without the disproportionate effects of sex chromosome driving the variability.
+
+```{r HTT_Leavitt_XYprobesPlots, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "mds", col = as.character(as.numeric(factor(HTT_Leavitt$Sentrix_ID))))
+legend("top", legend = levels(factor(HTT_Leavitt$Sentrix_ID)), fill = 1:nlevels(factor(HTT_Leavitt$Sentrix_ID)), horiz = T)
+
+
+SexCol<- as.numeric(factor(HTT_Leavitt$Sex))
+SexCol <- gsub("1", "gray", gsub("2", "deeppink",  gsub("3", "dodgerblue", SexCol)))
+
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "mds", col = SexCol)
+legend("top", legend = c("Female", "Male", "NA"),fill = c("deeppink","dodgerblue", "gray"), horiz = T)
+```
+
+As can be seen in the MDS plot, the variation in the methylation data due to sex effects has been substantially reduced with the removal of the XY probes. 
+
+We'll also make a correlation heatmap with just the XY probes, which will allow us to check if the sex label in the metadata matches the observed sex from the methylation data (another quality control check). 
+
+```{r HTT_Leavitt_XYprobesHeatmap, fig.width=8, fig.height=7, echo=FALSE}
+XYcor <- cor(betas(HTT_Leavitt.xy), use = "pairwise.complete.obs")
+
+
+heatmap.2(XYcor,main = "Correlation of samples using XY probes (n = 11,648",
+          trace = "none", col = BuPu, dendrogram = "both",
+          RowSideColors = tissueCol, cexRow = 0.9,
+          ColSideColors = SexCol, cexCol = 0.9,
+          keysize = 1)
+legend("top", bty="n", legend = c("Male", "Female", "NA"),fill = c("dodgerblue","deeppink", "gray"), horiz = T)
+legend("topright", bty="n", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+```
+
+We can see that the COB_22_52_Cortex exhibits sex-mismatch in that it is labeled as a female but clusters with the male samples based on its XY methylation patterns. It is likely that COB51_Cortex is a male sample. 
+
+Here's how the samples cluster in a dendogram now that SNP and XY probes have been removed:
+
+```{r HTT_Leavitt_SNPXYprobesCluster, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "cluster")
+```
+
+The clustering is largely driven by tissue differences, as previously seen. 
+
+### G. Filtering out "bad" probes
+
+First, let's do some checks between HTT_Leavitt and HTT_Leavitt.2 to ensure that all the data is matched between these objects since some of the data we'll used to filter HTT_Leavitt comes from HTT_Leavitt.2.
+
+Are all of the probes (called with *featureNames()*) in HTT_Leavitt also in HTT_Leavitt.2?  Are all of the samples in HTT_Leavitt (called with *sampleNames()*) also in HTT_Leavitt.2?
+
+```{r HTT_Leavitt_projectChecks, echo=FALSE}
+all(featureNames(HTT_Leavitt)%in%featureNames(HTT_Leavitt.2))
+all(sampleNames(HTT_Leavitt)%in%sampleNames(HTT_Leavitt.2))
+```
+
+The answer to both questions is yes!
+
+##### Missing beta values
+
+We are looking for probes where there was no average beta value (the measure of methylation) calculated by GenomeStudio. This is done when GenomeStudio detects intensity values from less than three beads for a given probe. There are multiple beads on the array as a means of obtaining technical replicates and so probes which have fewer than three beads representing it are called as an NA.
+**avgbeta** is a matrix of the beta values for each sample at each probe. 
+**badAvgbeta** is a logical matrix that shows which probes have NAs for which samples.
+From this we make **nbadAvgbeta**, which sums up the number of "TRUE"'s for each row.  Our threshold is 1 badAvgbeta for a probe to be removed.
+
+```{r HTT_Leavitt_badAvgbeta, fig.width=8, fig.height=7, echo=FALSE}
+avgbeta <- betas(HTT_Leavitt.2)[featureNames(HTT_Leavitt),sampleNames(HTT_Leavitt)]
+badAvgbeta <- is.na(avgbeta)
+nbadAvgbeta <- print(sum(rowSums(badAvgbeta)>=1))  #5631
+
+dotchart(colSums(badAvgbeta), cex=0.8, main = paste("Bad Avg Beta: probes = 473,864"))
+```
+
+This dot chart is shows how many probes are defined as having a "bad average beta value" by the threshold we specified above. As a general rule of thumb a sample has to have more than 10% (40,000) of probes deemed "bad" before it is considered for removal. Our worst sample has only ~500 probes with a bad average beta value. Here we have identified 5631 probes with a bad average beta value using thresholds defined above. 
+
+##### Bad detection p-values
+
+**Detection p-values:** the confidence that the signal from the probe in question is more than the background (as defined by the negative control probes on the Illumina array).  We set our p-value threshold to 0.01.
+
+First, we make the object **badDetP**, which is a logical matrix that lets you know which probes do not meet our p-value requirements for which samples (i.e. it is a 473,684 by 18 matrix).
+From this we make **nbadDetP**, which sums up the number of "TRUE"'s in each row (i.e. for each probe).  We have set a threshold of 1 badDetP (detection p-value >= 0.01) to label a probe as a "bad" probe - this means that any one probe had to not meet our p-value threshold for at least 1 of our 18 samples to be targeted for removal.
+
+```{r HTT_Leavitt_badDetP, fig.width=8, fig.height=7, echo=FALSE}
+badDetP <- detection(HTT_Leavitt)>0.01
+nbadDetP <- print(sum(rowSums(badDetP)>=1)) #571
+
+dotchart(colSums(badDetP),main=paste("Bad Det P, probes = 473,684"), cex = 0.4)
+```
+
+As stated above a sample has to contain about 10% of bad probes to consider removing it. Our worst sample has only ~120. Here we have identified 571 probes which have a bad detection P-value using thresholds defined above.
+
+
+##### Removing these bad probes
+
+```{r HTT_Leavitt_probeRemoval, echo=FALSE}
+badProbes <- rowSums(badAvgbeta)>=1|rowSums(badDetP)>=1
+sum(badProbes)# badProbes = 6144
+HTT_Leavitt <- HTT_Leavitt[!badProbes,] 
+dim(HTT_Leavitt) # probes = 467,720, n = 18
+# save (HTT_Leavitt, file= 'HTT_Leavitt(filtered).RData')
+```
+
+We then take out all probes identified above as having either a bad detection P-value or a bad average beta value or both. In total we have removed 6,223 "bad" probes from our study. 5631 (badAvgbeta) + 654 (badDetP) = 6285 yet we removed only 6144. This is because there were some probes identified which overlapped as having both bad average beta values and bad detection P-values. We have a total of 467,720 probes left in our analysis.
+
+##### Cross-hybridizing probes
+
+Some probes have been found to cross-hybridize with other chromosomes (Price et al. 2013 *Epigenetics*).  It is at the discretion of the user whether or not they want to remove these cross-hybridizing probes, since it isn't a guarantee that they will cross-hybridize every time the experiment is run.  Probes that cross-hybridize to the sex chromosomes are typically removed, as they run a higher risk of confounding the data than probes that cross-hybridize to autosomal chromosomes.  
+
+**snp_index** is a list of which probes do not contain SNPs. It is derived from fData(HTT_Leavitt)$n_SNPCpG, which is a matrix of how many SNPs are possible for that probe; if there's an NA that is good, because that means there's no SNP in that probe.  We then filter HTT_Leavitt, taking only the probes that were listed in **snp index**. We also remove probes which bind multiple locations in the genome as long as one of the locations is on the XY chromosome. The reason for this is as the X and Y chromosomes are not balanced amongst our samples (males vs females) we have to remove all probes which bind them so as to not skew the normalization. We do not remove multiple binders of probes which bind at various sites only in the autosomal chromosomal regions because they will most likely not skew our normalization and when we obtain our "hit list" we will verify them using pyrosequencing in order to determine if the specific site of interest is providing the signal we are seeing.
+
+```{r HTT_Leavitt_xHybrid, echo=FALSE}
+snp_index <- which(is.na(fData(HTT_Leavitt)$n_SNPCpG))
+(n.polymorphic.probes<-(length(featureNames(HTT_Leavitt))-length(snp_index)))
+HTT_Leavitt <- HTT_Leavitt[snp_index, ] 
+dim(HTT_Leavitt) # probes = 447,570, n = 18
+xy_hit_index <- which(fData(HTT_Leavitt)$XY_Hits == "XY_NO")
+(n.XYcrosshybrid.probes<-(length(featureNames(HTT_Leavitt))-length(xy_hit_index)))
+HTT_Leavitt <- HTT_Leavitt[xy_hit_index, ] 
+dim(HTT_Leavitt) # probes = 437,035, n = 18
+save(HTT_Leavitt, file = "HTT_Leavitt(filtered).RData")
+```
+
+We have removed 30,685 (20150 polymorphic probes plus 10535 XY cross-hybridizing probes) probes using the two filters described above. This leaves us with 437,035 probes for our analysis.
+
+We will produce one more MDS plot and correlation heatmap using fully filtered (colour-corrected/background-subtracted) data.
+
+```{r HTT_Leavitt_filteredPlots, fig.width=8, fig.height=7, echo=FALSE}
+par(cex = 0.7)
+plotSampleRelation (HTT_Leavitt.cortex, method = "mds", col = as.character (as.numeric (factor (HTT_Leavitt.cortex$Sentrix_ID))))
+legend ("top", legend = levels (factor (HTT_Leavitt.cortex$Sentrix_ID)), cex= 0.6, fill = 1:nlevels (factor (HTT_Leavitt.cortex$Sentrix_ID)), horiz = T)
+```
+
+As before, we can see that there seems to somewhat of a chip-to-chip effect in the cortex samples. We will have to correct for this undesired effect by ComBat. 
+
+```{r HTT_Leavitt_filteredtissueMDS, fig.width=8, fig.height=7, echo=FALSE}
+tissueCol <- as.numeric(factor(HTT_Leavitt$Sample_Group))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+
+par(cex = 0.7)
+plotSampleRelation(HTT_Leavitt, method = "mds", col = tissueCol)
+legend("top", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+```
+
+As before, most of the variation in the methylation data is due to tissue differences (liver vs cortex). 
+
+```{r HTT_Leavitt_filteredHeatmap, fig.width=12, fig.height=12}
+tissueCol <- as.numeric(factor(HTT_Leavitt$Sample_Group))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+sentrixCol <- HTT_Leavitt$Sentrix_ID
+sentrixCol <- gsub("8221916079", "lightslateblue", gsub("8221932102",  "darkgreen", sentrixCol))
+
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+cor <- cor(betas(HTT_Leavitt), use = "pairwise.complete.obs")
+
+heatmap.2(cor,main = "Correlation of samples - 485,577 probes",
+          trace = "none", col = BuPu, dendrogram = "both",
+          RowSideColors = sentrixCol, cexRow = 1,
+          ColSideColors = tissueCol, cexCol = 1,
+          keysize = 1)
+legend("topright", bty="n", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+legend("top", bty = "n", title = "Sentrix ID", c("8221916079", "8221932102"), cex = 1, fill = c("lightslateblue","darkgreen"), horiz=T)
+```
+
+As before, most of the variation in the methylation data is due to tissue differences (liver vs cortex). 
+
+### Summary table of probe/sample filtering processes:
+Here is a table summarizing our probe filtering and pre-processing steps undertaken so far:
+
+```{r echo=FALSE}
+Filtered <- matrix(c("485,577", "18","Starting Probes", "485,512", "18","SNP Probes", "473,864", "18","XY Probes", "467,720", "18","Bad Probes", "447,570", "18","Polymorphic Probes", "437,035", "18","XY Cross-hybridizing", "437,035", "18", "Final Filtered Dataset"),ncol=3,byrow=TRUE)
+colnames(Filtered) <- c("Probes","Samples","Filtering")
+rownames(Filtered) <- c("I","II","III", "IV", "V", "VI", "VII")
+Filtered <- as.table(Filtered)
+```
+
+```{r results='asis', echo=FALSE}
+print(xtable(Filtered, align=c("llcr")), type="html")
+```
+
+We will continue with the normalization process using the objects HTT_Leavitt.RData and HTT_Leavitt.2.RData

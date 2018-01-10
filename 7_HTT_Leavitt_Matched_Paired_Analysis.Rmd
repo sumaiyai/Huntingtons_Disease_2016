@@ -1,0 +1,257 @@
+HTT_Leavitt Analysis  Paired Analysis of Matched Cortex and Liver Samples
+====================================================================
+## By: Sumaiya Islam
+## Date: August 31, 2015
+
+### Script contents:
+- Genome-wide analysis to identify differentially methylated sites between liver vs cortex samples using limma (paired analysis)
+- Same as above but using unpaired analysis
+- Candidate gene (ie HTT) analysis to identify differentially methylated sites between liver vs cortex samples using limma
+
+In the following script, we use paired analysis in limma (linear regression modeling) to investigate the following research question (as defined by Rebecca):
+
+Question 2: is the HTT gene differentially methylated between cortex and liver samples? Use the matched cortex and liver samples
+
+### A. Set up wd & packages
+
+We will initially set up our working directory and load our libraries.
+```{r include=FALSE}
+setwd("/home/sislam/HTT_Leavitt")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library("RColorBrewer")
+library(knitr)
+library(xtable)
+library(limma)
+library(ggplot2)
+library(reshape)
+library('BSgenome.Hsapiens.UCSC.hg19')
+```
+
+### B. Load data
+
+We will load the methylation data of the cortex samples only after preprocessing, normalization and CETS cell type correction. 
+
+```{r load_data}
+load("HTT_Leavitt.Matched.cor.final.RData")
+matchedData<-HTT_Leavitt.Matched.cor
+dim(matchedData) # probes = 437,035  n = 10
+CETS.sites<-read.csv(file="CETS.sites.csv") # load CETS markers
+CETS<-as.character(CETS.sites$x)
+matchedDat<-matchedData[!featureNames(matchedData)%in%CETS, ] # filter out CETS markers
+dim(matchedDat) # probes = 427,242  n = 10
+sampleNames(matchedDat)
+```
+
+### C. Paired Analysis with Limma (Epigenome-wide)
+
+```{r}
+sample.matrix.matched<-pData(matchedDat)
+# generate pairs
+sample.matrix.matched$Sample_Pairs<-c("1","2","3","4","5","-1","-2","-3","-4","-5")
+sample.matrix.matched$Sample_Pairs<-as.numeric(sample.matrix.matched$Sample_Pairs)
+(pairs<-factor(abs(sample.matrix.matched$Sample_Pairs)))
+tissue<-sample.matrix.matched$Sample_Group
+(paired.info<-subset(sample.matrix.matched, select=c("Sample_Group", "Sample_Pairs")))
+
+# make model matrix
+(design.matched<- model.matrix(~tissue + pairs))
+# fit model
+fit.matched <- lmFit(exprs(matchedDat), design.matched)
+# use Bayesian model to generated moderated statistics
+fit.matched.moderated <- eBayes(fit.matched)
+colnames(fit.matched.moderated)
+# generate topTable linear regression outputs
+head(topT.matched.pairs <- topTable(fit.matched.moderated, coef=2, adjust = "BH", number = Inf))
+head(topT.matched <- topTable(fit.matched.moderated, coef=2, adjust = "BH", number = Inf, p.value=0.01))# at FDR of 0.01, 174,626 hits
+colnames(topT.matched.pairs)
+dim(topT.matched.pairs)
+hist(topT.matched.pairs$P.Value)
+```
+
+We will depict the hits as a volcano plot
+```{r}
+colnames(exprs(matchedDat))
+delta.betas.calc<-function(x){
+  sum<-(x[,1]-x[,6]) + (x[,2]-x[,7]) + (x[,3]-x[,8]) + (x[,4]-x[,9]) + (x[,5]-x[,10])
+  avg<-sum/5
+}
+matched.betas.topT<-betas(matchedDat)[rownames(topT.matched.pairs),]
+identical(rownames(topT.matched.pairs), rownames(matched.betas.topT))
+topT.matched.pairs$dB<-delta.betas.calc(matched.betas.topT)
+summary(topT.matched.pairs$dB)
+head(topT.matched.pairs)
+## Make a basic volcano plot
+call.hits<-function(x){
+  if(topT.matched.pairs$adj.P.Val[x]<= 0.01 & abs(topT.matched.pairs$dB[x])>=0.25){
+    "hit"}
+  else{
+    "non-hit"
+  }
+  }
+table(factor(topT.matched.pairs$hits)) # hit = 29,593; non-hit = 397,649
+hits<-unlist(lapply(1:nrow(topT.matched.pairs), call.hits))
+topT.matched.pairs$hits<-hits
+ggplot(topT.matched.pairs, aes(x=dB, y=-log10(adj.P.Val), color=hits, alpha = hits)) + geom_vline(xintercept=c(-0.25,0.25), color="darkgrey") + geom_hline(yintercept=(-log10(0.01)), color="darkgrey") + geom_point(shape=19) + theme_bw() +
+  scale_color_manual(values=c("deeppink1", "seashell4")) + scale_alpha_manual(values=c(0.40, 0.15)) + guides(colour= guide_legend(override.aes=list(alpha = 1))) + ylab("-log10(adj.P.Val)") + xlab("Delta Betas (Cortex-Liver)")
+```
+
+### D. Non-paired Analysis with Limma (Epigenome-wide)
+
+```{r}
+### compare this to a non-paired analysis
+# make model matrix
+(design.nonpaired<- model.matrix(~tissue))
+# fit model
+fit.nonpaired <- lmFit(exprs(matchedDat), design.nonpaired)
+# use Bayesian model to generated moderated statistics
+fit.nonpaired.moderated <- eBayes(fit.nonpaired)
+colnames(fit.nonpaired.moderated)
+# generate topTable linear regression outputs
+head(topT.nonpaired <- topTable(fit.nonpaired.moderated, coef=2, adjust = "BH", number = Inf, p.value=0.01)) 
+dim(topT.nonpaired) # at FDR of 0.01, 179,071 hits
+common.hits<-intersect(rownames(topT.nonpaired), rownames(topT.matched))
+length(common.hits) # common hits in unpaired vs paired analyses = 169,251
+```
+
+### B. Candidate gene analysis (CGA)
+
+```{r}
+fDat.matched<-fData(matchedDat)
+chr.four<-subset(fDat.matched, CHR == 4)
+probes.of.interest<-subset(chr.four, MAPINFO>=2973107 & MAPINFO<=3258169, select = TargetID)
+# probes.ordered<-probes.of.interest[order(probes.of.interest$MAPINFO),]
+# probes.ordered$TargetID
+
+nrow(probes.of.interest) # There are 87 probes underlying this region of interest. Note this differs from the total 100 probes underlying this region in UCSC Genome Browser because some of the probes (ie 13) have been filtered out.
+(target.probes<-as.character(probes.of.interest$TargetID)) # note that there is one non-CpG site in this region
+matchedDat.CGA<-matchedDat[target.probes,]
+dim(matchedDat.CGA) # probes = 87, n = 10
+table(matchedDat.CGA$Sample_Group) # Cortex samples = 5, Liver samples = 5
+identical(sampleNames(matchedDat.CGA), sampleNames(matchedDat))
+
+# (design.paired.cga <- model.matrix(~ tissue + pairs)) 
+# colnames(exprs(matchedDat.CGA))
+# 
+# rownames(design.paired.cga)<-sampleNames(matchedDat)
+# all(row.names(design.paired.cga)==colnames(exprs(matchedDat.CGA)))  # TRUE - check if all design matrix and methylation matrix are the same size
+
+## fit separate linear models for each individual candidate CpG 
+z<-lm(unlist(exprs(matchedDat.CGA)[1,]) ~  tissue + pairs)
+summary(z)
+mval<-exprs(matchedDat.CGA)
+p<-sapply(1:nrow(mval), function(x) {z<-lm(unlist(mval[x,]) ~  tissue + pairs)
+                                                  coef(summary(z))["tissueLiver", "Pr(>|t|)"]})
+adj.p<-p.adjust(p, method="BH")
+length(which(adj.p<=0.05))
+candidate.probes.df<-data.frame(Probes=as.character(rownames(exprs(matchedDat.CGA))), Adj.p.value=adj.p)
+hits.df<-subset(candidate.probes.df, Adj.p.value<=0.05) # 38 hits at FDR = 0.05
+hits<-hits.df$Probes
+hits.dat<-matchedDat.CGA[hits,]
+fDat.hits<-fData(hits.dat)
+hits.ordered<-fDat.hits[order(fDat.hits$MAPINFO),]
+rownames(hits.ordered)
+
+
+## fit the model using limma (note: should not use moderated t-statistics for a candidate gene analysis! This is just to cross-check hits)
+# fit.matched.CGA <- lmFit(exprs(matchedDat.CGA), design.paired.cga)
+# ## moderated variances estimated by eBays
+# FitEB.matched.CGA <- eBayes(fit.matched.CGA)
+# colnames(FitEB.matched.CGA)
+# ## generate topTable linear regression outputs
+# head(topT.matched.CGA <- topTable(FitEB.matched.CGA,coef="tissueLiver", adjust = "BH", number = Inf, p =0.01))
+# dim(topT.matched.CGA) # 32 hits at FDR = 0.01
+# rownames(topT.matched.CGA)
+
+
+# (Tissue.Pvalplot <- ggplot(topT.matched.CGA, aes(x = P.Value)) + geom_histogram(aes(y = ..density..), binwidth = 0.05, colour = "deeppink4", fill = "deeppink", alpha = 0.5) + geom_density(size = 1) + xlab("unadjusted P-value") + ylab("Frequency") + ggtitle(expression(atop("Unadj. P-val distribution for the tissue effects in HTT region"))))
+
+# scale attributes
+ex.matched<-exprs(matchedDat.CGA)
+ex.ord.matched <- ex.matched[order(fData(matchedDat.CGA)$CHR, fData(matchedDat.CGA)$MAPINFO),]
+matDat <- scale(t(ex.ord.matched))
+identical(colnames(ex.ord.matched), rownames(pData(matchedDat.CGA)))
+
+# use a heatmap to look examine 87 probes
+tissueCol <- as.numeric(factor(matchedDat.CGA$Sample_Group))
+tissueCol <- gsub("1", "orange",  gsub("2", "blue", tissueCol))
+
+BuPu <- colorRampPalette(brewer.pal(n = 9, "BuPu"))
+
+heatmap.2(matDat,dendrogram="row", symm=FALSE, Rowv=TRUE, Colv=FALSE, trace = "none", col = BuPu(256), RowSideColors = tissueCol, cexCol = 0.8, margins=c(9,9))
+legend("top", legend = c("Cortex", "Liver"),fill = c("orange","blue"), horiz = T)
+
+## calculating delta betas of all 87 probes underlying HTT region
+# function to calculate delta betas (cortex-liver differences averaged)
+delta.betas.calc<-function(x){
+  sum<-(x[,1]-x[,6]) + (x[,2]-x[,7]) + (x[,3]-x[,8]) + (x[,4]-x[,9]) + (x[,5]-x[,10])
+  avg<-sum/5
+}
+ordered.probes.dat<-betas(matchedDat.CGA)[order(fData(matchedDat.CGA)$CHR, fData(matchedDat.CGA)$MAPINFO),]
+identical(rownames(ordered.probes.dat), rownames(ordered.probes.dat))
+dBetas.paired<-delta.betas.calc(ordered.probes.dat)  
+dBetas.paired<-data.frame(dBetas.paired)
+summary(dBetas.paired)
+dBetas.paired$CpG<-rownames(dBetas.paired)
+probes.ordered<-rownames(dBetas.paired)
+dBetas.paired$CpG<-factor(dBetas.paired$CpG, levels=probes.ordered)
+str(dBetas.paired)
+melted.dBetas.paired<-melt(dBetas.paired)
+str(melted.dBetas.paired)
+# plot delta betas across probes
+ggplot(dBetas.paired, aes(CpG, dBetas.paired)) + geom_bar(stat="identity") + theme(axis.text.x=element_text(angle= 90)) + ylab("Delta Betas (Cortex-Liver)") + xlab("CpG") 
+# plot volcano plot
+## Make a basic volcano plot
+candidate.probes.reordered<-candidate.probes.df[match(dBetas.paired$CpG, candidate.probes.df$Probes),]
+identical(as.character(candidate.probes.reordered$Probes), as.character(dBetas.paired$CpG)) # TRUE
+dBetas.paired$Adj.p.val<-candidate.probes.reordered$Adj.p.value
+colnames(dBetas.paired)<-c("delta_beta", "CpG", "Adj.p.val")
+call.hits<-function(x){
+  if(dBetas.paired$Adj.p.val[x]<= 0.05){
+    "hit"}
+  else{
+    "non-hit"
+  }
+  }
+hits<-unlist(lapply(1:nrow(dBetas.paired), call.hits))
+dBetas.paired$hits<-hits
+table(hits)
+ggplot(dBetas.paired, aes(x=delta_beta, y=-log10(Adj.p.val), color=hits))  + geom_hline(yintercept=(-log10(0.05)), color="darkgrey") + geom_point(shape=19, size =3) + scale_color_manual(values=c("#c51b8a", "#2ca25f")) + theme_bw() + ylab("-log10(adj.P.Val)") + xlab("Delta Betas (Cortex-Liver)")
+
+   + scale_alpha_manual(values=c(0.40, 0.15)) + guides(colour= guide_legend(override.aes=list(alpha = 1))) +
+# write.csv(dBetas.paired,file = "DeltaBetas_32_HTT_Hits.csv")
+```
+
+### C. Permutation Analysis
+
+Question: What is the expectation that the number of tissue-specific hits in the HTT gene region arose from random chance?
+
+We will assess this question by permutation analysis in which we 
+a) Fit individual linear models for cortex vs. liver (by paired testing) across all sites in the matched dataset (ie genome-wide analysis)
+b) Select only gene body and promoter-associated genomic regions 
+c) Sample regions of same size as candidate gene region (ie 285,062 bp long) 
+d) See how many hits underlie those sampled regions
+e) Iterate steps a to d 1000 times
+
+```{r}
+# a) Fit individual linear models for cortex vs. liver (by paired testing) across all sites in the matched dataset (ie genome-wide analysis)
+z<-lm(unlist(exprs(matchedDat)[1,]) ~  tissue + pairs)
+summary(z)
+mval<-exprs(matchedDat)
+p<-sapply(1:nrow(mval), function(x) {z<-lm(unlist(mval[x,]) ~  tissue + pairs)
+                                                  coef(summary(z))["tissueLiver", "Pr(>|t|)"]})
+adj.p<-p.adjust(p, method="BH")
+length(which(adj.p<=0.05))
+all.probes.df<-data.frame(Probes=as.character(rownames(exprs(matchedDat))), Adj.p.value=adj.p)
+hits<-as.character(all.probes.df$Probes[which(all.probes.df$Adj.p.value< 0.05)])
+
+
+# b) Select only gene body and promoter-associated genomic regions 
+fDat.matched<-fData(matchedDat)
+chr.four<-subset(fDat.matched, CHR == 4)
+probes.of.interest<-subset(chr.four, MAPINFO>=2973107 & MAPINFO<=3258169, select = TargetID)
+```
+

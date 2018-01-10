@@ -1,0 +1,320 @@
+HTT_Leavitt CETS Brain Cell Type Correction
+========================================================
+## By: Sumaiya Islam
+## Date: September 29, 2014
+
+### Script contents:
+- CETS brain cell type correction for normalized, combat-corrected cortex-only dataset (n = 13)
+- CETS brain cell type correction for cortex samples (n = 5) of normalized matched dataset
+- CETS brain cell type correction for normalized entire dataset (n = 18)
+
+##### We will use an open-source R package, Cell EpigenoType Specific (CETS) mapper, designed for the quantification and normalization of differing neuronal proportions in genome-scale DNA methylation datasets. The application of CETS quantification and transformation can reduce cell type heterogeneity and improve replicability of epigenetic findings in the brain across cohorts. It is important to correct for differences in cell type proportions in methylation data as these differences can lead to false discoveries in the methylation analysis (Guintivano et al 2013 *Epigenetics*).
+
+We will initially set our working directory and load our libraries.
+
+```{r}
+install.packages("cets_0.99.2.tar.gz")
+library(cets)
+library(wateRmelon)
+library(lumi)
+```
+
+Load calibration data set
+
+The calibration dataset included in the cetsBrain package contains FACS-sorted neuron and glia samples from a cohort of depression patients and control subjects. The package contains two objects: A data matrix (brain) of sample methylation profiles for the top 10,000 most differentially methylated probes between neurons and glia and (pdBrain) a sample annotation data frame:
+
+```{r}
+# load "brain dataset" from data file in cetsBrain
+load("~/HTT_Leavitt/cetsBrain/data/cetsBrain.rda") # click on cetsBrain.rda file to place in workspace
+dim(brain)
+brain[1:3, 1:4]
+head(pdBrain)
+```
+
+Load HTT_Leavitt methylation datasets 
+
+```{r}
+# load cortex only dataset (after normalization and ComBat)
+load("HTT_Leavitt.cortex.combat.RData")
+dim(HTT_Leavitt.cortex.combat) # probes = 437,035  n = 13
+sampleNames(HTT_Leavitt.cortex.combat)
+pData(HTT_Leavitt.cortex.combat)
+cortex.betas<- betas(HTT_Leavitt.cortex.combat) # use beta values for CETS correction
+
+# load matched dataset (after normalization; no need for ComBat)
+load("HTT_Leavitt.Matched.norm.RData")
+dim(HTT_Leavitt.Matched.swan) # probes = 437,035  n = 10
+sampleNames(HTT_Leavitt.Matched.swan)
+# subset out only cortex samples as liver samples are also present in this dataset
+matched.cortex.samples<-grep("Cortex", HTT_Leavitt.Matched.swan$Sample_Group)
+matched.cortex<-HTT_Leavitt.Matched.swan[,matched.cortex.samples]
+dim(matched.cortex) # probes = 437,035  n = 5
+matched.cortex.betas<- betas(matched.cortex)
+head(matched.cortex.betas) # use beta values for CETS correction
+
+# load entire HTT_Leavitt dataset (all samples)
+load("HTT_Leavitt.swan.RData")
+dim(HTT_Leavitt.swan) # probes = 437,035  n = 18
+sampleNames(HTT_Leavitt.swan)
+table(HTT_Leavitt.swan$Sample_Group)
+```
+
+We will examine the age of the samples used in the HTT_Leavitt.cortex dataset (note use Age_Death as all samples were collected post-mortem)
+
+```{r}
+summary(pData(HTT_Leavitt.cortex.combat)$Age_Death)
+```
+
+We can see that most of the samples are of advanced age (mean 62 yrs old). Since the age of the samples used to generate the CETS loci in the Guintivano et al. *Epigenetics* study ranged from 13 to 79 yr old, the CETS cell type correction should be appropriate for this dataset.
+
+Create the neuron and glia reference profiles:
+
+```{r}
+modelIdx <- list(neuron = pdBrain$celltype == "N", glia = pdBrain$celltype ==  "G")
+ # getReference returns a 2-column matrix, representing reference profiles for the two cell types.
+refProfile <- getReference(brain, modelIdx)
+head(refProfile)
+```
+
+#### For the cortex dataset
+
+Estimate the neuronal proportion:
+
+The estProportion function returns an estimate of the percentage of cell type in the first column of its profile argument (neurons in this case). 
+```{r}
+prop <- estProportion(cortex.betas, profile = refProfile)
+prop<-as.data.frame(prop)
+prop$glia<-apply(prop,1,function(x) 1-x)
+colnames(prop)<- c("neuron", "glia")
+head(prop)
+# write.csv(prop, file = "Cortex_CETS_Neuronal_Glia_Proportions.csv", row.names=T)
+summary(prop)
+plot(density(prop$neuron)) 
+shapiro.test(prop$neuron) # Shapiro-Wilk test for normality has p-value > 0.05 indicating that data is normally distributed
+# T-test to see if neuronal proportions differ between Control vs HD
+Status<-pData(HTT_Leavitt.cortex.combat)$Disease_status
+table(Status)
+# A basic box with the conditions colored
+identical(rownames(pData(HTT_Leavitt.cortex.combat)),rownames(prop))
+ggplot(prop, aes(Status, neuron))+
+  geom_boxplot(aes(fill=Status),color="black", outlier.shape=NA)+
+  geom_point(shape=21, fill="grey",colour="black", size=4)+
+  theme_bw()+xlab("Disease Status")+ylab("Neuronal Proportion (Unadjusted Data)") + scale_fill_manual(values=c("#ef8a62", "#67a9cf"))
+# independent 2-group Mann-Whitney U Test
+wilcox.test(prop$neuron ~ Status) # p-value = 0.1375 (Mann Whitney U)
+
+identical(rownames(prop), sampleNames(HTT_Leavitt.cortex.combat))
+cor.test(prop$neuron, HTT_Leavitt.cortex.combat$HD_CAG_length, method="spearman") # Spearman's rho = -0.565, p = 0.044
+test.dat<-data.frame(Neuron=prop$neuron, HD_CAG_length = HTT_Leavitt.cortex.combat$HD_CAG_length)
+ggplot(test.dat, aes(HD_CAG_length, Neuron))+ 
+  geom_point(shape=21, fill="grey",colour="black", size=4) +geom_smooth(method = "lm", colour = "red")+
+  theme_bw() +xlab("CAG Repeat Length") +ylab("Neuronal Proportion")
+
+```
+
+We can see that the neuronal (or glial) proportions between Control and HD samples are not statistically significant. 
+
+We will now perform cell-type correction based on the neuronal/glial proportions 
+
+```{r}
+all(rownames(prop)%in%colnames(cortex.betas))
+cortex.beta.df<- as.data.frame(cortex.betas)
+head(cortex.beta.df)[,1:5]
+# fit methylation data for each probe in the dataset by the neuronal proportion
+avebeta.lm<-apply(cortex.beta.df, 1, function(x){
+  brain.sub<-prop[colnames(cortex.beta.df),]
+  lm(x~neuron,data=brain.sub)
+})
+
+# obtain residuals for each probe across all samples (as a matrix)
+residuals<-t(sapply(avebeta.lm, function(x)residuals(summary(x))))
+head(residuals)
+colnames(residuals)<-colnames(cortex.beta.df)
+
+# generate adjusted residuals by adding the mean beta of each probe to the residuals
+adj.residuals<-residuals+matrix(apply(cortex.beta.df, 1, mean), nrow=nrow(residuals), ncol=ncol(residuals))
+
+
+head(adj.residuals)[,1:5]
+class(adj.residuals)
+r1<-as.data.frame(adj.residuals)
+head(cortex.beta.df)[,1:5]
+# check difference between corrected and uncorrected methylation data
+all.equal(r1,cortex.beta.df)
+```
+
+To make sure we do not induce any NAs into the dataset when we convert the beta values back M-values (by log2 transformation), we need to ensure we do not have any corrected beta values that are greater or equal to zero or any beta values that are greater than 1. 
+
+```{r}
+adj.residuals[adj.residuals<=0]<-0.001 # convert any values that are less than or equal to zero to 0.001
+adj.residuals[adj.residuals>1]<-0.999 # convert any values that are greater than 1 to 0.999
+adj.M.values<-beta2m(adj.residuals)
+any(is.na(adj.M.values)) # should be FALSE indicating there are no NAs
+```
+
+Save corrected dataset: 
+
+```{r}
+HTT_Leavitt.cortex.cor<-HTT_Leavitt.cortex.combat
+identical(rownames(adj.M.values), rownames(betas(HTT_Leavitt.cortex.combat))) # should be TRUE
+identical(colnames(adj.M.values), colnames(betas(HTT_Leavitt.cortex.combat))) # should be TRUE
+exprs(HTT_Leavitt.cortex.cor)<-adj.M.values
+all.equal(betas(HTT_Leavitt.cortex.cor),adj.residuals)
+# write.table(adj.residuals, file="HTT_Leavitt.cortex.cor.final_Bvalues", sep="\t", quote=FALSE)
+## made corrections in metadata---checked by Sumaiya & Becca (August 18, 2014)
+# pData(HTT_Leavitt.cortex.cor)
+# sampleNames(HTT_Leavitt.cortex.cor)
+# colnames(exprs(HTT_Leavitt.cortex.cor))
+# pData(HTT_Leavitt.cortex.cor)$HD_CAG_length<-as.numeric(c(19,  62, 18, 50, 42, 17, 41, 43, 15, 18, 17, 42, 42))
+# pData(HTT_Leavitt.cortex.cor)$Sex<-c("M", "M", "M", "M", "F", "M","M", "F", "M", "M", "M", "M", "F")
+# any(is.na(exprs(HTT_Leavitt.cortex.cor)))
+# save(HTT_Leavitt.cortex.cor,file = "HTT_Leavitt.cortex.cor.final.RData")
+```
+
+Run CETS on corrected dataset to show that the neuronal and glial proportions are the same across samples in the adjusted data
+```{r}
+load(file = "HTT_Leavitt.cortex.cor.final.RData")
+adj.cortex.betas<-betas(HTT_Leavitt.cortex.cor)
+
+prop.adj <- estProportion(adj.cortex.betas, profile = refProfile)
+prop.adj<-as.data.frame(prop.adj)
+prop.adj$glia<-apply(prop.adj,1,function(x) 1-x)
+colnames(prop.adj)<- c("neuron", "glia")
+head(prop.adj)
+
+# get combined adjusted and unadjusted data frame
+prop$Status<-Status
+prop.adj$Status<-Status
+prop$Adjustment<-"unadjusted"
+prop.adj$Adjustment<-"adjusted"
+combo.dat<-rbind(prop, prop.adj)
+combo.dat$Adjustment<-as.factor(combo.dat$Adjustment)
+combo.dat$Adjustment<-factor(combo.dat$Adjustment, levels=c("unadjusted", "adjusted"))
+levels(combo.dat$Adjustment)<-c("Before CETS", "After CETS")
+
+## plot neuronal proportions before and after CETS
+ggplot(combo.dat, aes(Status, neuron))+
+  geom_boxplot(aes(fill=Status),color="black", outlier.shape=NA)+
+  geom_point(shape=21, fill="grey",colour="black", size=4, position=position_jitter(w=0.2))+
+  theme_bw()+xlab("Disease Status")+ylab("Neuronal Proportion") + scale_fill_manual(values=c("#ef8a62", "#67a9cf"), guide=FALSE) + facet_wrap(~Adjustment)
+```
+
+
+```{r}
+#### For the matched dataset
+
+Estimate the neuronal proportion:
+
+The estProportion function returns an estimate of the percentage of cell type in the first column of its profile argument (neurons in this case). 
+```{r}
+prop.m <- estProportion(matched.cortex.betas, profile = refProfile)
+prop.m<-as.data.frame(prop.m)
+prop.m$glia<-apply(prop.m,1,function(x) 1-x)
+colnames(prop.m)<- c("neuron", "glia")
+head(prop.m)
+summary(prop.m)
+plot(density(prop.m$neuron)) # note the non-Gaussian distribution
+
+# A basic box with the conditions colored
+identical(rownames(pData(matched.cortex)),rownames(prop.m))
+prop.m.melted<-melt(prop.m)
+ggplot(prop.m.melted, aes(x=variable, y=value)) + geom_boxplot(fill="dodgerblue") + theme_bw() + xlab("Brain Cell Type") + ylab("Proportion") 
+```
+
+We can see that the neuronal (or glial) proportions between Control and HD samples in the matched cortex are not statistically significant; however, we are limited by the fact that only control sample is present in this dataset.
+
+We will now perform cell-type correction based on the neuronal/glial proportions 
+
+```{r}
+all(rownames(prop.m)%in%colnames(matched.cortex.betas))
+matched.cortex.betas<-as.data.frame(matched.cortex.betas)
+head(matched.cortex.betas)[,1:5]
+# fit methylation data for each probe in the dataset by the neuronal proportion
+avebeta.lm.m<-apply(matched.cortex.betas, 1, function(x){
+  brain.sub<-prop.m[colnames(matched.cortex.betas),]
+  lm(x~neuron,data=brain.sub)
+})
+
+# obtain residuals for each probe across all samples (as a matrix)
+residuals.m<-t(sapply(avebeta.lm.m, function(x)residuals(summary(x))))
+head(residuals.m)
+colnames(residuals.m)<-colnames(matched.cortex.betas)
+
+# generate adjusted residuals by adding the mean beta of each probe to the residuals
+adj.residuals.m<-residuals.m+matrix(apply(cortex.beta.df, 1, mean), nrow=nrow(residuals.m), ncol=ncol(residuals.m))
+
+
+head(adj.residuals.m)[,1:5]
+class(adj.residuals.m)
+r2<-as.data.frame(adj.residuals.m)
+head(matched.cortex.betas)[,1:5]
+# check difference between corrected and uncorrected methylation data
+all.equal(r2,matched.cortex.betas)
+```
+
+To make sure we do not induce any NAs into the dataset when we convert the beta values back M-values (by log2 transformation), we need to ensure we do not have any corrected beta values that are greater or equal to zero or any beta values that are greater than 1. 
+
+```{r}
+adj.residuals.m[adj.residuals.m<=0]<-0.001 # convert any values that are less than or equal to zero to 0.001
+adj.residuals.m[adj.residuals.m>1]<-0.999 # convert any values that are greater than 1 to 0.999
+adj.M.values.matched<-beta2m(adj.residuals.m)
+any(is.na(adj.M.values.matched)) # should be FALSE indicating there are no NAs
+```
+
+Save corrected dataset: 
+
+```{r}
+HTT_Leavitt.Matched.cor <- HTT_Leavitt.Matched.swan[, order(HTT_Leavitt.Matched.swan$Sample_Group)] # re-order matched dataset according to tissue type
+colnames(HTT_Leavitt.Matched.cor)
+colnames(adj.M.values.matched)
+identical(rownames(exprs(HTT_Leavitt.Matched.cor)), rownames(adj.M.values.matched))
+m.vals.matched<-cbind(adj.M.values.matched, exprs(HTT_Leavitt.Matched.cor)[,6:10])
+head(adj.M.values.matched)
+head(m.vals.matched)
+identical(colnames(HTT_Leavitt.Matched.cor),colnames(m.vals.matched))
+exprs(HTT_Leavitt.Matched.cor)<-m.vals.matched
+# write.table(m.vals.matched, file="HTT_Leavitt.matched.cor.final_Mvalues", sep="\t", quote=FALSE)
+## made corrections in metadata---checked by Sumaiya & Becca (August 18, 2014)
+# pData(HTT_Leavitt.Matched.cor)$Sex<-c("M","M","M", "M", "F", "M", "M", "M", "M", "F")
+# pData(HTT_Leavitt.Matched.cor)$HD_CAG_length<-as.numeric(c(41, 17, 50, 62, 42, 41, 17, 50, 62, 42))
+# any(is.na(exprs(HTT_Leavitt.Matched.cor)))
+# save(HTT_Leavitt.Matched.cor,file = "HTT_Leavitt.Matched.cor.final.RData")
+```
+
+#### For the entire dataset
+
+Note that we simply need to combine the corrected cortex samples (n=13) with the liver samples (n=5) to generate the entire corrected dataset
+
+Save corrected dataset: 
+
+```{r}
+HTT_Leavitt.cor <- HTT_Leavitt.swan[, order(HTT_Leavitt.swan$Sample_Group)] # re-order matched dataset according to tissue type
+colnames(HTT_Leavitt.cor)
+colnames(adj.residuals)
+str(m.vals.cortex)
+head(adj.M.values)
+identical(rownames(exprs(HTT_Leavitt.cor)), rownames(adj.M.values))
+m.vals.all<-cbind(adj.M.values, exprs(HTT_Leavitt.cor)[,14:18])
+head(m.vals.all)
+sampleNames(HTT_Leavitt.cor)<-colnames(m.vals.all)
+pData(HTT_Leavitt.cor)$Disease_status<-c("Control", "HD","Control", "HD",      "HD","Control", "HD","HD", "Control","Control", "Control", "HD", "HD",      "Control", "HD","HD","HD","HD")
+identical(colnames(HTT_Leavitt.cor),colnames(m.vals.all))
+exprs(HTT_Leavitt.cor)<-m.vals.all
+# write.table(m.vals.all, file="HTT_Leavitt.cor.final_Mvalues", sep="\t", quote=FALSE)
+## made corrections in metadata---checked by Sumaiya & Becca (August 18, 2014)
+# pData(HTT_Leavitt.cor)$HD_CAG_length<-as.numeric(c(19, 62, 18, 50, 42, 17, 41, 43, 15, 18, 17, 42, 42, 17, 41, 42, 62, 50))
+# pData(HTT_Leavitt.cor)$Sex<-c("M", "M", "M", "M", "F", "M",  "M", "F", "M", "M", "M", "M", "F", "M", "M", "F","M", "M")
+# any(is.na(exprs(HTT_Leavitt.cor)))
+# save(HTT_Leavitt.cor,file = "HTT_Leavitt.cor.final.RData")
+``` 
+
+## Check if inter-individual variation in HTT mRNA expression is associated with inter-individual neuronal cell proportions
+```{r}
+list.files()
+cell_expression<-read.csv("Cortex_Cell_Prop_HTT_Expression.csv", header=TRUE)
+str(cell_expression)
+ggplot(cell_expression, aes(neuron, HTT_Expression)) + geom_point(aes(fill = Sample_Name), shape=21, size=5)  +
+  theme_bw()+xlab("Predicted Neuronal Proportion")+ylab("HTT mRNA expression") 
+
+```
+

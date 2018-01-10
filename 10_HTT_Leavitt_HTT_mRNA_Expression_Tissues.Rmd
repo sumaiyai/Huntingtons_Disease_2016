@@ -1,0 +1,78 @@
+HTT_Leavitt HTT mRNA Expression in Cortex vs Liver
+================================================================
+##### By: Sumaiya Islam
+##### Date: Sept 1, 2015
+
+### Script contents:
+- Test for significance of difference of averaged HTT mRNA expression measures (from 3 replicates in each tissue) between cortex vs liver of 4 individuals from matched 450K dataset
+
+### A. Set up wd & packages
+
+We will initially set our working directory and load our libraries.
+```{r HTT_Leavitt_setup, include = FALSE, echo=FALSE, warning=FALSE}
+setwd("/home/sislam/HTT_Leavitt")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library("RColorBrewer")
+library(knitr)
+library(xtable)
+library(limma)
+library(reshape)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(MASS)
+```
+
+### B. Load data
+
+We will load the data containing the averaged HTT mRNA expression values (from 3 replicates from each tissue) in cortex and liver. 
+
+```{r load_data, echo=FALSE, warning=FALSE}
+HTT.mRNA.dat<-read.csv(file="HTT_Tissues_Expression.csv", header = T, check.names=F)
+head(HTT.mRNA.dat)
+str(HTT.mRNA.dat)
+```
+
+### C. Check for normality
+
+Note that interpretation of normality test is adapted from: http://stats.stackexchange.com/questions/15696/interpretation-of-shapiro-test
+
+
+```{r normality_check, echo=FALSE}
+(Liver.normality<-shapiro.test(HTT.mRNA.dat$Liver))
+(Cortex.normality<-shapiro.test(HTT.mRNA.dat$Cortex))
+```
+We can see that since the Shapiro-Wilk test for normality yielded a p-value > 0.05 for both the Cortex and Liver measures. We can conclude that we cannot reject the hypothesis that the sample measures come from a population which has a normal distribution.
+
+Also according to the q-plot for the Cortex and Liver measures:
+
+
+```{r qplot, fig.height=3, fig.width=3, echo=FALSE}
+qqnorm(HTT.mRNA.dat$Liver)
+qqnorm(HTT.mRNA.dat$Cortex)
+```
+
+
+The qqplots for Cortex and Liver data are relatively normal.
+
+##### Since the Shapiro test doesn't indicate that the data come from a population with a non-normal distribution and the data looks vaguely normal according to q-q plots, we can assume that the measures likely arise from a Gaussian distribution. Given that t-tests are quite robust to violations of normality assumption, it seems that a paired t-test would be appropriate in this case.
+
+### D. Test for significance of difference between Cortex and Liver HTT expression values
+
+```{r stats_test, fig.height=3, fig.width=3, echo=FALSE}
+
+head(melted.dat<-melt(HTT.mRNA.dat))
+ggplot(melted.dat, aes(variable, value))+
+  geom_boxplot(color="grey", outlier.shape=NA)+
+  geom_point(color = "#3182bd", shape=19, size=4, position = position_jitter(w = 0.05))+
+  theme_bw()+xlab("Tissue")+ylab("Averaged HTT mRNA Expression")
+
+(stat.test<-t.test(HTT.mRNA.dat$Cortex, HTT.mRNA.dat$Liver, paired=T))
+```
+
+We can say that the difference in the averaged HTT mRNA expression measures are statistically significant (paired t-test, p = 0.023)
+

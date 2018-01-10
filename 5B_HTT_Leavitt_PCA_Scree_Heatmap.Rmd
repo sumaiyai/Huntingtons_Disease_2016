@@ -1,0 +1,380 @@
+HTT_Leavitt Principal Component Analysis Revised Script
+========================================================
+## By: Sumaiya Islam
+## Date: May 4, 2015
+
+### Script contents:
+- PCA on the cortex-only dataset (before and after CETS brain-cell type correction)
+- PCA on the matched dataset (before and after CETS brain-cell type correction)
+
+### A. Set up working directory & packages
+
+Use R.2.14
+
+We will initially set our working directory and load our libraries.
+```{r}
+library(reshape)
+library(ggplot2)
+library(RColorBrewer)
+library(grid)
+library(gridExtra)
+library(sva)
+```
+
+## Heat scree plot Function
+```{r}
+### Function of association meta variable with PC (ANOVA)
+heat_scree_plot<-function(Loadings, Importance, Num, Order){
+  adjust<-1-Importance[1]
+  pca_adjusted<-Importance[2:length(Importance)]/adjust
+  pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted)))
+  
+  scree<-ggplot(pca_df[which(pca_df$PC<Num),],aes(PC,adjusted_variance))+geom_bar(stat = "identity",color="black",fill="grey")+theme_bw()+
+        theme(axis.text = element_text(size =12),
+              axis.title = element_text(size =15),
+              plot.margin=unit(c(1,1.5,0.2,2.25),"cm"))+ylab("Variance")+
+    scale_x_continuous(breaks = seq(1,Num,1))
+  
+  #### Heat
+  ## correlate meta with PCS
+  ## Run anova of each PC on each meta data variable
+
+  aov_PC_meta<-lapply(1:ncol(meta_categorical), function(covar) sapply(1:ncol(Loadings), function(PC) summary(aov(Loadings[,PC]~meta_categorical[,covar]))[[1]]$"Pr(>F)"[1]))
+   cor_PC_meta<-lapply(1:ncol(meta_continuous), function(covar) sapply(1:ncol(Loadings), function(PC) (cor.test(Loadings[,PC],as.numeric(meta_continuous[,covar]),alternative = "two.sided", method="spearman", na.action=na.omit)$p.value)))
+  names(aov_PC_meta)<-colnames(meta_categorical)
+  names(cor_PC_meta)<-colnames(meta_continuous)
+  aov_PC_meta<-do.call(rbind, aov_PC_meta)
+  cor_PC_meta<-do.call(rbind, cor_PC_meta)
+  aov_PC_meta<-rbind(aov_PC_meta, cor_PC_meta)
+  aov_PC_meta<-as.data.frame(aov_PC_meta)
+  #adjust
+  aov_PC_meta_adjust<-aov_PC_meta[,2:ncol(aov_PC_meta)]
+  
+    
+  #reshape
+  avo<-aov_PC_meta_adjust[,1:(Num-1)]
+  avo_heat_num<-apply(avo,2, as.numeric)
+  avo_heat<-as.data.frame(avo_heat_num)
+  colnames(avo_heat)<-sapply(1:(Num-1), function(x) paste("PC",x, sep=""))
+  avo_heat$meta<-rownames(avo)
+  avo_heat_melt<-melt(avo_heat, id=c("meta"))
+  
+  # cluster meta data
+  ord <- Order
+  meta_var_order<-unique(avo_heat_melt$meta)[rev(ord)]
+  avo_heat_melt$meta <- factor(avo_heat_melt$meta, levels = meta_var_order)
+  
+  # color if sig
+  # avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]>=0.9){">=0.9"}else{
+   # if(avo_heat_melt$value[x]>=0.5){">=0.5"}else{
+     # if(avo_heat_melt$value[x]>=0.1){">=0.1"}else{"<0.1"}}})
+  avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]<=0.001){"<=0.001"}else{
+     if(avo_heat_melt$value[x]<=0.01){"<=0.01"}else{
+       if(avo_heat_melt$value[x]<=0.05){"<=0.05"}else{">0.05"}}})
+  
+  heat<-ggplot(avo_heat_melt, aes(variable,meta, fill = Pvalue)) +
+  geom_tile(color = "black",size=0.5) +
+  theme_gray(8)+scale_fill_manual(values=c("#084594","#4292c6","#9ecae1","#deebf7"))+
+      theme(axis.text = element_text(size =10, color="black"),
+            axis.text.x = element_text(),
+          axis.title = element_text(size =15),
+          legend.text = element_text(size =14),
+          legend.title = element_text(size =12),
+          legend.position = c(1, 0), legend.justification = c(1,0),
+          plot.margin=unit(c(0,2.25,1,1),"cm"))+
+    xlab("Principal Component")+ylab(NULL)
+  
+  grid.arrange(scree, heat, ncol=1, widths = c(4, 1), heights = c(2, 4))
+}
+```
+
+
+### B. Load files
+
+#### We will be analyzing the cortex-only and matched datasets (before and after CETS brain cell-type correction)
+
+```{r}
+# cortex-only dataset
+## load cortex-only dataset (normalized, ComBat-corrected, BEFORE CETS cell type correction)
+load("HTT_Leavitt.cortex.combat.RData")
+cortexDat.uncor<-HTT_Leavitt.cortex.combat
+## load corresponding meta data
+meta<-read.csv(file="cortexDes.final.csv", header=T, row.names=1)
+identical(rownames(meta), rownames(pData(cortexDat.uncor)))
+cortexDes.uncor<-meta
+str(cortexDes.uncor)
+identical(colnames(exprs(cortexDat.uncor)),rownames(cortexDes.uncor))
+## re-structure meta data: change categorical variables to factors for ANOVA and continuous variables to numeric for Spearman's correlation
+cortexDes.uncor$Sentrix_ID <- as.factor(cortexDes.uncor$Sentrix_ID)
+cortexDes.uncor$Sentrix_Position <- as.character(cortexDes.uncor$Sentrix_Position)
+cortexDes.uncor$Sample_Group <- as.factor(cortexDes.uncor$Sample_Group)
+cortexDes.uncor$Sex<- as.factor(cortexDes.uncor$Sex)
+cortexDes.uncor$Disease_status <- as.factor(cortexDes.uncor$Disease_status)
+cortexDes.uncor$HD_CAG_length <- as.numeric(cortexDes.uncor$HD_CAG_length) 
+cortexDes.uncor$WT_CAG_length <- as.numeric(cortexDes.uncor$WT_CAG_length)
+cortexDes.uncor$Age_Death <- as.numeric(cortexDes.uncor$Age_Death)
+cortexDes.uncor$Age_Onset  <- as.numeric(cortexDes.uncor$Age_Onset)
+prop<-read.table("Cortex_CETS_Neuronal_Glia_Proportions.txt") # include neuron/glia proportions into meta data
+identical(rownames(cortexDes.uncor),rownames(prop))
+cortexDes.uncor$neuron<-prop$neuron
+cortexDes.uncor$glia<-prop$glia
+# for Row
+for (i in 1:nrow(cortexDes.uncor)){
+  cortexDes.uncor$Row[i]<-paste(substr(cortexDes.uncor[i,"Sentrix_Position"], start=1, stop=3))
+}
+cortexDes.uncor$Row<- as.factor(cortexDes.uncor$Row)
+str(cortexDes.uncor)
+
+## load cortex-only dataset (normalized, ComBat-corrected, AFTER CETS cell type correction)
+load("HTT_Leavitt.cortex.cor.final.RData") 
+cortexDat.cor<-HTT_Leavitt.cortex.cor
+identical(rownames(meta), rownames(pData(cortexDat.cor)))
+cortexDes.cor<-meta
+identical(colnames(exprs(cortexDat.cor)),rownames(cortexDes.cor))
+## re-structure meta data: change categorical variables to factors for ANOVA and continuous variables to numeric for Spearman's correlation
+cortexDes.cor$Sentrix_ID <- as.factor(cortexDes.cor$Sentrix_ID)
+cortexDes.cor$Sentrix_Position <- as.character(cortexDes.cor$Sentrix_Position)
+cortexDes.cor$Sample_Group <- as.factor(cortexDes.cor$Sample_Group)
+cortexDes.cor$Sex<- as.factor(cortexDes.cor$Sex)
+cortexDes.cor$Disease_status <- as.factor(cortexDes.cor$Disease_status)
+cortexDes.cor$HD_CAG_length <- as.numeric(cortexDes.cor$HD_CAG_length) 
+cortexDes.cor$WT_CAG_length <- as.numeric(cortexDes.cor$WT_CAG_length)
+cortexDes.cor$Age_Death <- as.numeric(cortexDes.cor$Age_Death)
+cortexDes.cor$Age_Onset  <- as.numeric(cortexDes.cor$Age_Onset)
+prop<-read.table("Cortex_CETS_Neuronal_Glia_Proportions.txt")
+identical(rownames(cortexDes.cor),rownames(prop))
+cortexDes.cor$neuron<-prop$neuron
+cortexDes.cor$glia<-prop$glia
+# for Row
+for (i in 1:nrow(cortexDes.cor)){
+  cortexDes.cor$Row[i]<-paste(substr(cortexDes.cor[i,"Sentrix_Position"], start=1, stop=3))
+}
+cortexDes.cor$Row<- as.factor(cortexDes.uncor$Row)
+str(cortexDes.cor)
+
+# matched samples
+## matched dataset (normalized, BEFORE CETS cell type correction)
+load("HTT_Leavitt.Matched.norm.RData")
+matchedDat.uncor<-HTT_Leavitt.Matched.swan
+matched.meta<-read.csv(file="matchedDes.final.csv", header=T, row.names=1)
+matched.meta<-matched.meta[match(colnames(matchedDat.uncor), rownames(matched.meta)),]
+identical(rownames(matched.meta), rownames(pData(matchedDat.uncor)))
+matchedDes.uncor<-matched.meta
+identical(colnames(exprs(matchedDat.uncor)),rownames(matchedDes.uncor))
+## re-structure meta data: change categorical variables to factors for ANOVA and continuous variables to numeric for Spearman's correlation
+matchedDes.uncor$Sentrix_ID <- as.factor(matchedDes.uncor$Sentrix_ID)
+matchedDes.uncor$Sentrix_Position <- as.character(matchedDes.uncor$Sentrix_Position)
+matchedDes.uncor$Sample_Group <- as.factor(matchedDes.uncor$Sample_Group)
+matchedDes.uncor$Sex<- as.factor(matchedDes.uncor$Sex)
+matchedDes.uncor$Disease_status <- as.factor(matchedDes.uncor$Disease_status)
+matchedDes.uncor$HD_CAG_length <- as.numeric(matchedDes.uncor$HD_CAG_length) 
+matchedDes.uncor$WT_CAG_length <- as.numeric(matchedDes.uncor$WT_CAG_length)
+matchedDes.uncor$Age_Death <- as.numeric(matchedDes.uncor$Age_Death)
+matchedDes.uncor$Age_Onset  <- as.numeric(matchedDes.uncor$Age_Onset)
+for (i in 1:nrow(matchedDes.uncor)){
+  matchedDes.uncor$Row[i]<-paste(substr(matchedDes.uncor[i,"Sentrix_Position"], start=1, stop=3))
+}
+matchedDes.uncor$Row<- as.factor(matchedDes.uncor$Row)
+str(matchedDes.uncor)
+
+## matched dataset (normalized, AFTER CETS cell type correction)
+load("HTT_Leavitt.Matched.cor.final.RData")
+matchedDat.cor<-HTT_Leavitt.Matched.cor
+matched.meta<-matched.meta[match(colnames(matchedDat.cor), rownames(matched.meta)),]
+matchedDes.cor<-matched.meta
+identical(colnames(exprs(matchedDat.cor)),rownames(matchedDes.cor))
+## re-structure meta data: change categorical variables to factors for ANOVA and continuous variables to numeric for Spearman's correlation
+matchedDes.cor$Sentrix_ID <- as.factor(matchedDes.cor$Sentrix_ID)
+matchedDes.cor$Sentrix_Position <- as.character(matchedDes.cor$Sentrix_Position)
+matchedDes.cor$Sample_Group <- as.factor(matchedDes.cor$Sample_Group)
+matchedDes.cor$Sex<- as.factor(matchedDes.cor$Sex)
+matchedDes.cor$Disease_status <- as.factor(matchedDes.cor$Disease_status)
+matchedDes.cor$HD_CAG_length <- as.numeric(matchedDes.cor$HD_CAG_length) 
+matchedDes.cor$WT_CAG_length <- as.numeric(matchedDes.cor$WT_CAG_length)
+matchedDes.cor$Age_Death <- as.numeric(matchedDes.cor$Age_Death)
+matchedDes.cor$Age_Onset  <- as.numeric(matchedDes.cor$Age_Onset)
+for (i in 1:nrow(matchedDes.uncor)){
+  matchedDes.cor$Row[i]<-paste(substr(matchedDes.cor[i,"Sentrix_Position"], start=1, stop=3))
+}
+matchedDes.cor$Row<- as.factor(matchedDes.cor$Row)
+str(matchedDes.cor)
+```
+
+
+## PCA Scree Heatmap for cortex-only dataset (normalized, ComBat-corrected, BEFORE CETS cell type correction)
+
+```{r warning=FALSE, fig.height=9, fig.width=11}
+## PCA
+PCA_full<-princomp(scale(betas(cortexDat.uncor), center = TRUE, scale = FALSE), cor=FALSE) # scaling is not necessary for normalized dataset
+Loadings<-as.data.frame(unclass(PCA_full$loadings))
+vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+plot(x=pca_df$PC, y = pca_df$adjusted_variance)
+# save(pca_df, file="Adj_PC_variance_cortexDat.uncor.txt")
+
+#Specify which covariates are categorical and/or categorical
+colnames(cortexDes.uncor)
+meta_categorical<-cortexDes.uncor[,c("Disease_status", "Sex", "Sentrix_ID", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-cortexDes.uncor[,c("neuron", "HD_CAG_length", "WT_CAG_length",  "Age_Death",        "Age_Onset", "PMI")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Disease status","Sex", "Chip", "Row")
+colnames(meta_continuous)<-c("Neuronal cell proportion", "HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset", "PMI")
+
+# Specifiy the number of PCs you want shown
+Num<-13
+
+# Designate what order you want the variables to appear (continuous variables rbinded to categorical variables in function)
+Order<-c(1, 8, 9, 4, 5, 2, 3, 7, 10, 6)
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order)
+```
+
+## PCA Scree Heatmap for cortex-only dataset (normalized, ComBat-corrected, AFTER CETS cell type correction)
+
+```{r warning=FALSE, fig.height=9, fig.width=11}
+## PCA
+PCA_full<-princomp(scale(betas(cortexDat.cor), center = TRUE, scale = FALSE), cor=FALSE) # scaling is not necessary for normalized dataset
+Loadings<-as.data.frame(unclass(PCA_full$loadings))
+vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+hist(pca_df$adjusted_variance)
+# save(pca_df, file="Adj_PC_variance_cortexDat.cor.txt")
+
+#Specify which covariates are categorical and/or categorical
+colnames(cortexDes.cor)
+meta_categorical<-cortexDes.cor[,c("Disease_status", "Sex", "Sentrix_ID", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-cortexDes.cor[,c("neuron", "HD_CAG_length", "WT_CAG_length",  "Age_Death",        "Age_Onset", "PMI")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Disease status","Sex", "Chip", "Row")
+colnames(meta_continuous)<-c("Neuronal cell proportion", "HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset", "PMI")
+
+# Specifiy the number of PCs you want shown
+Num<-13
+
+# Designate what order you want the variables to appear (continuous variables rbinded to categorical variables in function)
+Order<-c(1, 8, 9, 4, 5, 2, 3, 7, 10, 6)
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order)
+```
+
+## PCA Scree Heatmap for HD samples of cortex-only dataset (normalized, ComBat-corrected, AFTER CETS cell type correction)
+
+```{r warning=FALSE, fig.height=9, fig.width=11}
+
+# subset out HD cases from cortexDat.cor
+HD.cases<-grep("HD", colnames(cortexDat.cor))
+
+# subset out HD cases
+HD.cortexDat.cor<-cortexDat.cor[,HD.cases]
+HD.names<-sampleNames(HD.cortexDat.cor)
+HD.cortexDes.cor<-cortexDes.cor[HD.names,]
+identical(colnames(exprs(HD.cortexDat.cor)), rownames(HD.cortexDes.cor)) # TRUE
+
+
+## PCA
+PCA_full<-princomp(scale(betas(HD.cortexDat.cor), center = TRUE, scale = FALSE), cor=FALSE) # scaling is not necessary for normalized dataset
+str(PCA_full)
+Loadings<-as.data.frame(unclass(PCA_full$loadings))
+vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+# save(pca_df, file="Adj_PC_variance_cortexDat.cor.txt")
+
+#Specify which covariates are categorical and/or categorical
+colnames(HD.cortexDes.cor)
+meta_categorical<-HD.cortexDes.cor[,c("Sex", "Sentrix_ID", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-HD.cortexDes.cor[,c("neuron", "HD_CAG_length", "WT_CAG_length",  "Age_Death",     "Age_Onset", "PMI")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Sex", "Chip", "Row")
+colnames(meta_continuous)<-c("Neuronal cell proportion", "HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset", "PMI")
+
+# Specifiy the number of PCs you want shown
+Num<-7
+
+# Designate what order you want the variables to appear (continuous variables rbinded to categorical variables in function)
+Order<-1:9
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order)
+
+# As we can see that age of disease onset correlates with PC4 (comprising 14.5% of the DNA methylation variance). We will look at the correlation between PC4 score and age of disease onset in these samples:
+colnames(HD.cortexDes.cor)
+identical(rownames(Loadings), rownames(HD.cortexDes.cor)) # TRUE
+# check correlation between PC4 (labeled as "Comp.5" in Loadings object) loadings and Age of Disease onset
+cor.test(Loadings[,c("Comp.5")], HD.cortexDes.cor[,c("Age_Onset")] ,alternative = "two.sided", method="spearman", na.action=na.omit) 
+```
+
+
+
+
+## PCA Scree Heatmap for matched dataset (normalized, BEFORE CETS cell type correction)
+
+```{r warning=FALSE, fig.height=9, fig.width=11}
+## PCA
+PCA_full<-princomp(scale(betas(matchedDat.uncor), center = TRUE, scale = FALSE), cor=FALSE) # scaling is not necessary for normalized dataset
+Loadings<-as.data.frame(unclass(PCA_full$loadings))
+vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+# save(pca_df, file="Adj_PC_variance_matchedDat.uncor.txt")
+
+#Specify which covariates are categorical and/or categorical
+colnames(matchedDes.uncor)
+meta_categorical<-matchedDes.uncor[,c("Sample_Group", "Sex", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-matchedDes.uncor[,c("HD_CAG_length", "WT_CAG_length",  "Age_Death", "Age_Onset", "PMI")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Tissue","Sex", "Row")
+colnames(meta_continuous)<-c( "HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset", "PMI")
+
+# Specifiy the number of PCs you want shown
+Num<-10
+
+# Designate what order you want the variables to appear (changed heat_scree_plot function so categorical variables rbinded to continuous variables)
+Order<-c(1:8)
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order)
+```
+
+## PCA Scree Heatmap for matched dataset (normalized, AFTER CETS cell type correction)
+
+```{r warning=FALSE, fig.height=9, fig.width=11}
+## PCA
+PCA_full<-princomp(scale(betas(matchedDat.cor), center = TRUE, scale = FALSE), cor=FALSE) # scaling is not necessary for normalized dataset
+Loadings<-as.data.frame(unclass(PCA_full$loadings))
+vars <- PCA_full$sdev^2
+Importance<-vars/sum(vars)
+adjust<-1-Importance[1]
+pca_adjusted<-Importance[2:length(Importance)]/adjust
+(pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted))))
+# save(pca_df, file="Adj_PC_variance_matchedDat.cor.txt")
+
+#Specify which covariates are categorical and/or categorical
+colnames(matchedDes.cor)
+meta_categorical<-matchedDes.cor[,c("Sample_Group", "Sex", "Row")]  # input column numbers in meta that contain categorical variables
+meta_continuous<-matchedDes.cor[,c("HD_CAG_length", "WT_CAG_length",  "Age_Death", "Age_Onset", "PMI")] # input column numbers in meta that contain continuous variables
+meta_continuous<-data.frame(meta_continuous)
+colnames(meta_categorical)<-c("Tissue","Sex", "Row")
+colnames(meta_continuous)<-c( "HD CAG length", "WT CAG length", "Age of Death", "Age of Disease Onset", "PMI")
+
+# Specifiy the number of PCs you want shown
+Num<-10
+
+# Designate what order you want the variables to appear (changed heat_scree_plot function so categorical variables rbinded to continuous variables)
+Order<-c(1:8)
+
+#Apply function on PCA results, pulls in the meta data and beta values from above
+heat_scree_plot(Loadings, Importance, Num, Order)
+```
